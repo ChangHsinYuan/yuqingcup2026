@@ -1,0 +1,35 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ustc/deepseek-v4-flash",
+  "small_model": "ustc/deepseek-v4-flash",
+  "default_agent": "director",
+  "instructions": ["AGENTS.md"],
+  "permission": {
+    "bash": {
+      "python core/pipeline.py *": "allow",
+      "python utils/*": "allow",
+      "python -m core.pipeline *": "allow",
+      "ls *": "allow",
+      "cat *": "allow",
+      "*": "ask"
+    },
+    "edit": "ask",
+    "read": "allow"
+  },
+  "agent": {
+    "director": {
+      "description": "Vidance 视频生成主控 agent。接收中文概念，编排编剧→生成→配音→审片→合成全流程，输出有声短片。",
+      "mode": "primary",
+      "model": "ustc/deepseek-v4-flash"
+    },
+    "reviewer": {
+      "description": "审片子agent。接收关键帧+场景描述，用多模态LLM打分，返回结构化审查结果。",
+      "mode": "subagent",
+      "model": "ustc/claude-haiku-4-5",
+      "permission": {
+        "edit": "deny",
+        "bash": { "python utils/llm.py *": "allow", "*": "deny" }
+      }
+    }
+  }
+}

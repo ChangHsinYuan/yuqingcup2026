@@ -1,0 +1,42 @@
+{
+  "llm": {
+    "base_url": "https://api.llm.ustc.edu.cn/v1",
+    "api_key": "sk-M4b0y-Euavlan2tL6ZcWfA",
+    "models": {
+      "script": "deepseek-v4-flash",
+      "prompt_opt": "deepseek-v4-flash",
+      "review": "claude-haiku-4-5",
+      "review_strict": "claude-sonnet-4-6"
+    }
+  },
+  "comfyui": {
+    "wan": {"host": "127.0.0.1", "port": 8189},
+    "hunyuan": {"host": "127.0.0.1", "port": 8190},
+    "sdxl": {"host": "127.0.0.1", "port": 8191},
+    "flux": {"host": "127.0.0.1", "port": 8192}
+  },
+  "tts": {
+    "host": "127.0.0.1",
+    "port": 9880,
+    "model_dir": "/mnt/dataset/zxy/CosyVoice2-0.5B",
+    "default_voice": "default",
+    "voices": {
+      "default": {
+        "prompt_wav": "/mnt/disk_sdb/zxy/CosyVoice/asset/zero_shot_prompt.wav",
+        "prompt_text": "希望你以后能够做的比我还好呦。"
+      },
+      "cross_lingual": {
+        "prompt_wav": "/mnt/disk_sdb/zxy/CosyVoice/asset/cross_lingual_prompt.wav",
+        "prompt_text": ""
+      }
+    }
+  },
+  "output_dir": "/mnt/dataset/zxy/vidance/output",
+  "wan_defaults": {
+    "width": 1280,
+    "height": 704,
+    "fps": 24,
+    "steps": 20,
+    "cfg": 5
+  }
+}
