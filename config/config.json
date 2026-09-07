@@ -19,17 +19,23 @@
     "host": "127.0.0.1",
     "port": 9880,
     "model_dir": "/mnt/dataset/zxy/CosyVoice2-0.5B",
-    "default_voice": "default",
-    "voices": {
-      "default": {
-        "prompt_wav": "/mnt/disk_sdb/zxy/CosyVoice/asset/zero_shot_prompt.wav",
-        "prompt_text": "希望你以后能够做的比我还好呦。"
-      },
-      "cross_lingual": {
-        "prompt_wav": "/mnt/disk_sdb/zxy/CosyVoice/asset/cross_lingual_prompt.wav",
-        "prompt_text": ""
-      }
-    }
+    "default_voice": "edge-xiaoxiao",
+    "engines": ["cosyvoice", "edge-tts"],
+    "edge_voices": {
+      "edge-xiaoxiao": "晓晓-女声自然",
+      "edge-xiaoyi": "晓伊-女声活泼",
+      "edge-yunjian": "云健-男声沉稳",
+      "edge-yunyang": "云扬-男声播音",
+      "edge-moe": "萌系高音-哈基米风",
+      "edge-family": "夸张解说-家人们风",
+      "edge-slow": "慢速抒情旁白",
+      "edge-deep": "低沉男声"
+    },
+    "cosy_voices": {
+      "cosy-default": "CosyVoice默认",
+      "cosy-cross": "CosyVoice跨语言"
+    },
+    "custom_voice_dir": "/mnt/disk_sdb/zxy/vidance/voices"
   },
   "output_dir": "/mnt/dataset/zxy/vidance/output",
   "wan_defaults": {
