@@ -4,7 +4,9 @@
 
 ## 项目概述
 
-Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核心流程：中文概念→LLM编剧→Wan T2V生成→CosyVoice配音→多模态审片→ffmpeg合成→有声短片。
+Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核心流程：中文概念→LLM编剧→Wan T2V生成→双引擎TTS配音→多模态审片→ffmpeg合成→有声短片。
+
+**当前状态：v0 端到端验证通过**（2026-09-07），详见 [docs/v0-design.md](./docs/v0-design.md)。
 
 ## 目录结构
 
@@ -12,19 +14,21 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 vidance/
 ├── opencode.json              # opencode 配置（agents + permissions）
 ├── AGENTS.md                  # 本文件
-├── config/config.json         # 运行时配置（API key、引擎地址、模型名）
+├── config/config.json         # 运行时配置（API key、引擎地址、模型名、音色）
 ├── core/pipeline.py           # 端到端流水线主控
 ├── utils/
 │   ├── comfy_api.py           # ComfyUI HTTP 客户端（Wan T2V）
 │   ├── llm.py                 # USTC LLM 客户端（编剧/prompt优化/审片）
-│   ├── tts.py                 # CosyVoice TTS 客户端
-│   ├── tts_server.py          # CosyVoice FastAPI 服务（GPU2:9880）
+│   ├── tts.py                 # TTS 客户端（双引擎：edge-tts + CosyVoice）
+│   ├── tts_server.py          # TTS FastAPI 服务（双引擎，GPU2:9880）
 │   ├── ffmpeg_tools.py        # 抽帧/SRT/合成
 │   └── workflows/wan_t2v.json # Wan T2V workflow 模板
+├── voices/                    # 自定义 CosyVoice 克隆音色素材目录
 ├── .opencode/
 │   ├── agents/{director,reviewer}.md
 │   └── skills/{scriptwriting,review}/SKILL.md
-├── docs/                      # 设计文档
+├── docs/                      # 设计文档（roadmap + v0-design + v1-design）
+├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
 ```
 
@@ -38,7 +42,7 @@ python core/pipeline.py "一只猫在月球上跳舞"
 ### 启动 TTS 服务
 ```bash
 conda activate cosyvoice
-CUDA_VISIBLE_DEVICES=2 python utils/tts_server.py &
+CUDA_VISIBLE_DEVICES=2 TTS_FP16=1 python utils/tts_server.py &
 ```
 
 ### 单步操作
@@ -49,12 +53,27 @@ python utils/llm.py --concept "概念"
 # T2V 生成
 python utils/comfy_api.py "english prompt" -o output/clips/shot_1.mp4
 
-# TTS 配音
-python utils/tts.py "中文旁白" -o output/clips/shot_1.wav
+# TTS 配音（列出所有音色）
+python utils/tts.py --list-voices
+
+# TTS 配音（指定音色，edge-* 或 cosy-*）
+python utils/tts.py "中文旁白" -v edge-moe -o output/clips/shot_1.wav
 
 # 抽帧
 python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 ```
+
+## TTS 音色规范
+
+音色按前缀路由引擎（服务在 9880）：
+
+| 前缀 | 引擎 | 示例 |
+|------|------|------|
+| `edge-*` | edge-tts（微软在线，自然） | `edge-xiaoxiao` 晓晓 / `edge-moe` 萌系高音 / `edge-family` 家人们风 |
+| `cosy-*` | CosyVoice（本地 GPU，可克隆） | `cosy-default` / `cosy-cross` |
+| `cosy-<自定义>` | CosyVoice 自定义克隆 | 在 `voices/<名>/prompt.wav` 放素材自动注册 |
+
+试听样本：`vidance/voice_samples/`（17 个 wav）。默认音色 `edge-xiaoxiao`（config.json）。
 
 ## 服务端口
 
@@ -64,7 +83,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | HunyuanVideo (ComfyUI) | 8190 | GPU3 | comfyui |
 | SDXL (ComfyUI) | 8191 | GPU1 | comfyui |
 | FLUX (ComfyUI) | 8192 | GPU0 | comfyui |
-| CosyVoice TTS | 9880 | GPU2 | cosyvoice |
+| TTS 双引擎 (edge-tts + CosyVoice) | 9880 | GPU2 | cosyvoice |
 
 ## 关键约定
 
@@ -87,5 +106,5 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | 模型 | 用途 |
 |------|------|
 | deepseek-v4-flash | 编剧、prompt 优化 |
-| claude-sonnet-4-6 | 多模态审片 |
-| claude-haiku-4-5 | 快速审片（备选） |
+| claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
+| claude-sonnet-4-6 | 审片备选（review_strict，534s/镜太慢） |
