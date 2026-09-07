@@ -11,12 +11,8 @@
 ## 0、可视化效果
 
 - v0：初步简陋的流程：
+[v0](./assets/final_moe.mp4)
 
-
-<video width="640" height="360" controls>
- <source src="./assets/final_moe.mp4" type="video/mp4">
- 您的浏览器不支持 video 标签。
-</video>
 
 ## 1、项目构思
 
