@@ -751,9 +751,9 @@ python utils/tts.py "中文旁白" -v edge-moe -o /tmp/test.wav
 | 版本 | 核心新增 | 关键依赖 | 设计文档 |
 |------|---------|---------|---------|
 | v1 | 角色一致性：FLUX 生角色→TripoSplat 出 3DGS→RenderSplat 渲染各角度参考帧→Wan I2V | TripoSplat 模型、RenderSplat | [v1-design.md](./v1-design.md) |
-| v2 | 长视频：RIFE 光流插帧软过渡 + ffmpeg 调色/配乐 + STT 字幕备选 | RIFE 模型、ffmpeg 滤镜、faster-whisper | 待写 |
-| v3 | 2D→3D→新视角：Hunyuan3D mesh 重建 + headless 渲染器 | Hunyuan3D 模型、mesh 渲染方案（Isaac Sim/Blender/trimesh 待定） | 待写 |
-| v4 | 营销号流水线：爬热点→选题→批量生成→发布 + 异步任务制 + 声音克隆生产化 | 爬虫库、任务队列 | 待写 |
+| v2 | 长视频：RIFE 光流插帧软过渡 + ffmpeg 调色/配乐 + STT 字幕备选 + 镜头并行 + MiniMax-H3 评估 | RIFE 模型、ffmpeg 滤镜、faster-whisper | [v2-design.md](./v2-design.md) |
+| v3 | 2D→3D→新视角：Hunyuan3D mesh 重建 + headless 渲染器 + 资产库 | Hunyuan3D 模型、mesh 渲染方案（trimesh+pyrender / Blender 待验证） | [v3-design.md](./v3-design.md) |
+| v4 | 营销号流水线：爬热点→选题→批量生成→发布 + 异步任务制 + 声音克隆生产化 + FunClip | 爬虫库、任务队列、发布 API | [v4-design.md](./v4-design.md) |
 
 > v3 的 mesh headless 渲染是已知阻塞点，需在 v3 启动前确定渲染方案。v1 用 3DGS 路径规避此问题（RenderSplat 全程 headless）。
 
