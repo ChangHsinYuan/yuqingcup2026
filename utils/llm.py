@@ -10,8 +10,10 @@
 import json
 import os
 import base64
+import io
 import urllib.request
 import urllib.error
+from PIL import Image
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
 
@@ -30,8 +32,8 @@ class LLMClient:
         self.models = llm_cfg['models']
 
     def chat(self, messages: list, model: str = None, temperature: float = 0.7,
-             max_tokens: int = 4096, timeout: int = 300) -> str:
-        """调用 LLM 文本对话，返回 assistant 回复文本"""
+             max_tokens: int = 4096, timeout: int = 300, retries: int = 2) -> str:
+        """调用 LLM 文本对话，返回 assistant 回复文本（超时自动重试）"""
         model = model or self.models['script']
         payload = {
             'model': model,
@@ -40,25 +42,33 @@ class LLMClient:
             'max_tokens': max_tokens,
         }
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        req = urllib.request.Request(
-            f'{self.base_url}/chat/completions',
-            data=data,
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.api_key}',
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read())
-            return result['choices'][0]['message']['content']
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f'LLM API {e.code}: {e.read().decode()}')
+        last_err = None
+        for attempt in range(retries + 1):
+            req = urllib.request.Request(
+                f'{self.base_url}/chat/completions',
+                data=data,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {self.api_key}',
+                },
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = json.loads(resp.read())
+                return result['choices'][0]['message']['content']
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(f'LLM API {e.code}: {e.read().decode()}')
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    import time
+                    time.sleep(3)
+        raise last_err
 
     def chat_json(self, messages: list, model: str = None,
-                  temperature: float = 0.7, timeout: int = 300) -> dict:
+                  temperature: float = 0.7, timeout: int = 300, retries: int = 0) -> dict:
         """调用 LLM 并解析 JSON 结果（提取 ```json 代码块或直接解析）"""
-        text = self.chat(messages, model=model, temperature=temperature, timeout=timeout)
+        text = self.chat(messages, model=model, temperature=temperature, timeout=timeout, retries=retries)
         return self._extract_json(text)
 
     @staticmethod
@@ -79,31 +89,52 @@ class LLMClient:
             raise
 
     @staticmethod
-    def _image_to_base64(path: str) -> str:
-        with open(path, 'rb') as f:
-            data = base64.b64encode(f.read()).decode('ascii')
-        ext = os.path.splitext(path)[1].lower()
-        mime = {'jpg': 'jpeg', 'jpeg': 'jpeg', 'png': 'png', 'webp': 'webp'}
-        ext = ext.lstrip('.')
-        return f'data:image/{mime.get(ext, "jpeg")};base64,{data}'
+    def _image_to_base64(path: str, max_size: int = 768) -> str:
+        """读取图片并转为 base64 data URL，自动缩放到 max_size 内以减少 payload"""
+        img = Image.open(path)
+        if img.mode == 'RGBA':
+            img = img.convert('RGB')
+        w, h = img.size
+        scale = min(1.0, max_size / max(w, h))
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=85)
+        data = base64.b64encode(buf.getvalue()).decode('ascii')
+        return f'data:image/jpeg;base64,{data}'
 
-    def script_write(self, concept: str) -> dict:
-        """概念→分镜脚本 JSON"""
+    def script_write(self, concept: str, character_desc: str = None) -> dict:
+        """概念→分镜脚本 JSON（v1: 含角色锚 + 每镜 camera 角度 + 背景描述）"""
+        char_section = ''
+        if character_desc:
+            char_section = (
+                f'  "character": {{\n'
+                f'    "desc": "{character_desc}"\n'
+                f'  }},\n'
+            )
         system = (
             '你是视频编剧。根据用户给出的中文概念，创作一个2-5个镜头的短片分镜脚本。\n'
             '输出严格JSON格式，不要加任何解释文字。\n'
             'JSON schema:\n'
             '{\n'
+            f'{char_section}'
             '  "title": "标题",\n'
             '  "concept": "原始概念",\n'
             '  "style": "英文风格描述，如 cinematic, warm sunset tone, 35mm film grain",\n'
             '  "shots": [\n'
             '    {\n'
             '      "id": 1,\n'
-            '      "scene_desc": "中文场景描述，详细描述画面内容",\n'
+            '      "scene_desc": "中文场景描述，详细描述画面内容（含角色动作）",\n'
             '      "narration": "中文旁白文本，字数与时长匹配（中文约4字/秒）",\n'
+            '      "background_desc": "中文背景描述，只描述环境不含角色",\n'
             '      "duration": 5,\n'
-            '      "camera": "镜头描述，如 wide shot, static camera"\n'
+            '      "camera": {\n'
+            '        "yaw": 0,\n'
+            '        "pitch": 15,\n'
+            '        "fov": 35,\n'
+            '        "distance": 0,\n'
+            '        "desc": "镜头描述，如 wide shot, slow pan"\n'
+            '      }\n'
             '    }\n'
             '  ]\n'
             '}\n'
@@ -111,6 +142,12 @@ class LLMClient:
             '- 每镜3-5秒（duration字段）\n'
             '- narration字数 = duration × 4（±20%），如5秒约20字\n'
             '- scene_desc要具体，包含主体、动作、环境、光线\n'
+            '- background_desc只描述场景环境，不包含角色\n'
+            '- camera.yaw是绕角色旋转的水平角度（0=正面，90=右侧，180=背面，270=左侧）\n'
+            '- camera.pitch是俯仰角度（0=平视，正值俯视，负值仰视，范围-30到30）\n'
+            '- camera.fov是视野角度（35=窄角特写，50=标准，70=广角）\n'
+            '- camera.distance填0即可（自动取景）\n'
+            '- 不同镜头用不同yaw角度展示角色多角度\n'
             '- 镜头之间有叙事逻辑'
         )
         messages = [
@@ -135,22 +172,92 @@ class LLMClient:
         ]
         return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
 
-    def review_shot(self, scene_desc: str, frame_paths: list,
-                    model: str = None) -> dict:
-        """多模态审片：关键帧+场景描述→{score, dimensions, feedback, pass}"""
-        model = model or self.models['review']
+    def optimize_character_prompt(self, character_desc: str) -> str:
+        """中文角色描述→英文 FLUX character_prompt（正面站立、纯色背景、角色参考图）"""
         system = (
-            '你是视频审片专家。根据给定的场景描述和关键帧截图，按4个维度打分（每维1-10）：\n'
+            '你是角色设计prompt优化器。将中文角色描述翻译为英文的FLUX image generation prompt。\n'
+            '要求：\n'
+            '- 保留角色所有外观细节（物种、毛色/肤色、服装、配饰、体型）\n'
+            '- 角色必须是自然站立姿态（standing upright on the ground, natural pose），绝不能躺倒、侧卧或悬浮在空中\n'
+            '- 固定后缀：standing upright on the ground, full body, front view, plain white background, high detail, character reference sheet\n'
+            '- 英文，不超过80词\n'
+            '- 不要加任何解释，只输出prompt文本'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'角色描述：{character_desc}'},
+        ]
+        return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
+
+    def optimize_scene_prompt(self, character_desc: str, scene_desc: str,
+                              style: str) -> str:
+        """中文角色描述+场景描述→英文 FLUX 场景图 prompt（角色自然融入场景，站立姿态）"""
+        system = (
+            '你是场景图生成prompt优化器。将中文角色描述和场景描述组合为英文的FLUX image generation prompt。\n'
+            '要求：\n'
+            '- 角色自然融入场景中（角色是画面主体之一，但场景环境完整呈现）\n'
+            '- 保留角色所有外观细节（物种、毛色/肤色、服装、配饰）\n'
+            '- 角色必须是自然姿态（如站立、行走、跳跃），与场景互动，绝不能躺倒或无故悬浮\n'
+            '- 保留场景所有环境细节（地形、天空、光线、建筑）\n'
+            '- 加入风格修饰词（来自style字段）\n'
+            '- 英文，不超过100词\n'
+            '- 不要加任何解释，只输出prompt文本'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'角色描述：{character_desc}\n场景描述：{scene_desc}\n风格：{style}'},
+        ]
+        return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
+
+    def optimize_background_prompt(self, background_desc: str, style: str) -> str:
+        """中文背景描述→英文 FLUX background_prompt（无角色）"""
+        system = (
+            '你是背景生成prompt优化器。将中文场景环境描述翻译为英文的FLUX image generation prompt。\n'
+            '要求：\n'
+            '- 只描述环境（地形、天空、建筑、植物、光线、天气），不包含任何角色或人物\n'
+            '- 加入风格修饰词（来自style字段）\n'
+            '- 固定后缀：no character, no person, empty scene, cinematic\n'
+            '- 英文，不超过60词\n'
+            '- 不要加任何解释，只输出prompt文本'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'背景描述：{background_desc}\n风格：{style}'},
+        ]
+        return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
+
+    def review_shot(self, scene_desc: str, frame_paths: list,
+                    model: str = None, character_ref: str = None) -> dict:
+        """多模态审片：关键帧+场景描述→{score, dimensions, feedback, pass}
+
+        v1: 若提供 character_ref，增加 character_consistency 维度（5维打分）。"""
+        model = model or self.models['review']
+        n_dims = 5 if character_ref else 4
+        char_dim = (
+            '\n5. character_consistency: 角色与参考图的一致性（外观/服装/毛色/体型）'
+            if character_ref else ''
+        )
+        char_instr = (
+            '\n第一张图是角色参考图，请对比后续关键帧中角色与参考图的一致性。'
+            if character_ref else ''
+        )
+        system = (
+            f'你是视频审片专家。根据给定的场景描述和关键帧截图，按{n_dims}个维度打分（每维1-10）：\n'
             '1. consistency: 画面内容与场景描述的匹配度\n'
             '2. quality: 画质（清晰度、色彩、构图）\n'
             '3. motion: 运动自然度、流畅度\n'
-            '4. artifact: 无明显AI生成痕迹（畸形、融合、闪烁等）\n'
-            '综合分=四维均值。≥7分通过。\n'
+            '4. artifact: 无明显AI生成痕迹（畸形、融合、闪烁等）'
+            f'{char_dim}\n'
+            f'综合分={n_dims}维均值。≥7分通过。{char_instr}\n'
             '输出严格JSON格式：\n'
-            '{"score": 8, "dimensions": {"consistency": 8, "quality": 9, "motion": 7, "artifact": 8}, '
-            '"feedback": "具体反馈", "pass": true}'
+            '{"score": 8, "dimensions": {"consistency": 8, "quality": 9, "motion": 7, '
+            '"artifact": 8' + (', "character_consistency": 8' if character_ref else '') +
+            '}, "feedback": "具体反馈", "pass": true}'
         )
-        content = [{'type': 'text', 'text': f'场景描述：{scene_desc}\n请按4维度打分'}]
+        content = [{'type': 'text', 'text': f'场景描述：{scene_desc}\n请按{n_dims}维度打分'}]
+        if character_ref:
+            b64 = self._image_to_base64(character_ref)
+            content.append({'type': 'image_url', 'image_url': {'url': b64}})
         for path in frame_paths:
             b64 = self._image_to_base64(path)
             content.append({'type': 'image_url', 'image_url': {'url': b64}})
@@ -159,7 +266,34 @@ class LLMClient:
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': content},
         ]
-        return self.chat_json(messages, model=model, temperature=0.3, timeout=600)
+        return self.chat_json(messages, model=model, temperature=0.3, timeout=60, retries=1)
+
+    def review_character(self, character_ref: str, preview_paths: list) -> dict:
+        """角色锚质量审查：参考图+多角度预览→{score, pass, feedback}"""
+        system = (
+            '你是3D角色质量审查专家。根据角色参考图和多角度3D渲染预览，评估3D重建质量。\n'
+            '按4个维度打分（每维1-10）：\n'
+            '1. completeness: 角色完整性（无残缺、无悬浮碎片）\n'
+            '2. multi_angle: 多角度稳定性（不同角度角色不崩坏）\n'
+            '3. fidelity: 与参考图的一致性（外观/颜色/形态匹配）\n'
+            '4. pose: 姿态自然度（角色应自然站立在地面上，而非躺倒、侧卧或悬浮在空中）\n'
+            '综合分=四维均值。≥6分通过。\n'
+            '输出严格JSON格式：\n'
+            '{"score": 7, "dimensions": {"completeness": 7, "multi_angle": 7, '
+            '"fidelity": 7, "pose": 7}, "feedback": "具体反馈", "pass": true}'
+        )
+        content = [{'type': 'text', 'text': '第一张是角色参考图，其余是多角度3D渲染预览，请评估3D重建质量。'}]
+        b64 = self._image_to_base64(character_ref)
+        content.append({'type': 'image_url', 'image_url': {'url': b64}})
+        for path in preview_paths:
+            b64 = self._image_to_base64(path)
+            content.append({'type': 'image_url', 'image_url': {'url': b64}})
+
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': content},
+        ]
+        return self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=60, retries=1)
 
 
 if __name__ == '__main__':

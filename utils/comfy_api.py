@@ -16,6 +16,7 @@ import sys
 import time
 import random
 import string
+import mimetypes
 import urllib.request
 import urllib.error
 
@@ -50,12 +51,16 @@ def render_template(template_str: str, params: dict) -> dict:
 
 
 class ComfyClient:
-    def __init__(self, host='127.0.0.1', port=8189, config=None):
+    def __init__(self, host=None, port=None, config=None, instance='wan'):
         if config is None:
             config = load_config()
-        wan_cfg = config.get('comfyui', {}).get('wan', {})
-        self.host = host or wan_cfg.get('host', '127.0.0.1')
-        self.port = port or wan_cfg.get('port', 8189)
+        if host and port:
+            self.host = host
+            self.port = port
+        else:
+            inst_cfg = config.get('comfyui', {}).get(instance, {})
+            self.host = host or inst_cfg.get('host', '127.0.0.1')
+            self.port = port or inst_cfg.get('port', 8189)
         self.base_url = f'http://{self.host}:{self.port}'
 
     def wait_ready(self, timeout=120) -> bool:
@@ -115,6 +120,30 @@ class ComfyClient:
                 f.write(resp.read())
         return output_path
 
+    def upload_image(self, image_path: str, overwrite: bool = False) -> str:
+        """Upload an image to ComfyUI's input directory, return the stored filename."""
+        filename = os.path.basename(image_path)
+        with open(image_path, 'rb') as f:
+            file_data = f.read()
+        boundary = '----VidanceBoundary' + ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+        mime_type = mimetypes.guess_type(filename)[0] or 'image/png'
+        parts = [
+            f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="{filename}"\r\nContent-Type: {mime_type}\r\n\r\n'.encode(),
+            file_data,
+            b'\r\n',
+        ]
+        if overwrite:
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="overwrite"\r\n\r\ntrue\r\n'.encode())
+        parts.append(f'--{boundary}--\r\n'.encode())
+        req = urllib.request.Request(
+            f'{self.base_url}/upload/image',
+            data=b''.join(parts),
+            headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        return result.get('name', filename)
+
     def generate_t2v(self, prompt: str, seed: int = None,
                      width: int = 1280, height: int = 704,
                      length: int = 121, steps: int = 20, cfg: float = 5.0,
@@ -171,6 +200,239 @@ class ComfyClient:
         if output_path:
             self.download_file(filename, subfolder, file_type, output_path)
             result['video_path'] = output_path
+
+        return result
+
+    def generate_i2v(self, prompt: str, image_path: str, seed: int = None,
+                     width: int = 1280, height: int = 704,
+                     length: int = 121, steps: int = 20, cfg: float = 5.0,
+                     fps: int = 24, negative_prompt: str = None,
+                     filename_prefix: str = 'vidance/shot',
+                     output_path: str = None) -> dict:
+        """Submit Wan I2V workflow with start_image, return {video_path, seed, params}."""
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        if negative_prompt is None:
+            negative_prompt = NEGATIVE_PROMPT
+
+        image_filename = self.upload_image(image_path, overwrite=True)
+
+        template_path = os.path.join(WORKFLOW_DIR, 'wan_i2v.json')
+        with open(template_path, 'r') as f:
+            template = f.read()
+
+        params = {
+            'prompt': prompt,
+            'negative_prompt': negative_prompt,
+            'image_filename': image_filename,
+            'width': width,
+            'height': height,
+            'length': length,
+            'steps': steps,
+            'cfg': cfg,
+            'seed': seed,
+            'fps': fps,
+            'filename_prefix': filename_prefix,
+        }
+        workflow = render_template(template, params)
+
+        if not self.wait_ready(timeout=60):
+            raise RuntimeError('ComfyUI server not ready')
+
+        prompt_id = self.queue_prompt(workflow)
+        outputs = self.wait_result(prompt_id)
+
+        video_info = outputs.get('12', {}).get('images', [{}])[0]
+        filename = video_info.get('filename', '')
+        subfolder = video_info.get('subfolder', '')
+        file_type = video_info.get('type', 'output')
+
+        if not filename:
+            raise RuntimeError(f'No video in outputs: {outputs}')
+
+        result = {
+            'prompt_id': prompt_id,
+            'seed': seed,
+            'params': params,
+            'filename': filename,
+            'subfolder': subfolder,
+        }
+
+        if output_path:
+            self.download_file(filename, subfolder, file_type, output_path)
+            result['video_path'] = output_path
+
+        return result
+
+    def generate_tripsplat(self, image_path: str, seed: int = None,
+                           num_gaussians: int = 262144,
+                           filename_prefix: str = 'vidance/character',
+                           output_path: str = None) -> dict:
+        """Image -> 3DGS (.ply) via TripoSplat. Returns {ply_path, seed, params}."""
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        image_filename = self.upload_image(image_path, overwrite=True)
+
+        template_path = os.path.join(WORKFLOW_DIR, 'triposplat.json')
+        with open(template_path, 'r') as f:
+            template = f.read()
+
+        params = {
+            'image_filename': image_filename,
+            'seed': seed,
+            'num_gaussians': num_gaussians,
+            'filename_prefix': filename_prefix,
+        }
+        workflow = render_template(template, params)
+
+        if not self.wait_ready(timeout=60):
+            raise RuntimeError('ComfyUI server not ready')
+
+        prompt_id = self.queue_prompt(workflow)
+        outputs = self.wait_result(prompt_id, timeout=600)
+
+        # SaveGLB node (id=13) outputs under '3d' key
+        file_info = outputs.get('13', {}).get('3d', [{}])[0]
+        filename = file_info.get('filename', '')
+        subfolder = file_info.get('subfolder', '')
+        file_type = file_info.get('type', 'output')
+
+        if not filename:
+            raise RuntimeError(f'No 3D file in outputs: {outputs}')
+
+        result = {
+            'prompt_id': prompt_id,
+            'seed': seed,
+            'params': params,
+            'filename': filename,
+            'subfolder': subfolder,
+        }
+
+        if output_path:
+            self.download_file(filename, subfolder, file_type, output_path)
+            result['ply_path'] = output_path
+
+        return result
+
+    def generate_character_anchor(self, image_path: str, seed: int = None,
+                                  num_gaussians: int = 262144,
+                                  frames: int = 8, width: int = 1024, height: int = 1024,
+                                  filename_prefix: str = 'vidance/character',
+                                  render_prefix: str = 'vidance/character_render',
+                                  output_dir: str = None) -> dict:
+        """Image -> 3DGS (.ply) + multi-angle renders in one workflow.
+
+        Returns {ply_path, render_paths, seed, params}.
+        """
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        image_filename = self.upload_image(image_path, overwrite=True)
+
+        template_path = os.path.join(WORKFLOW_DIR, 'triposplat_render.json')
+        with open(template_path, 'r') as f:
+            template = f.read()
+
+        params = {
+            'image_filename': image_filename,
+            'seed': seed,
+            'num_gaussians': num_gaussians,
+            'width': width,
+            'height': height,
+            'frames': frames,
+            'filename_prefix': filename_prefix,
+            'render_prefix': render_prefix,
+        }
+        workflow = render_template(template, params)
+
+        if not self.wait_ready(timeout=60):
+            raise RuntimeError('ComfyUI server not ready')
+
+        prompt_id = self.queue_prompt(workflow)
+        outputs = self.wait_result(prompt_id, timeout=600)
+
+        result = {
+            'prompt_id': prompt_id,
+            'seed': seed,
+            'params': params,
+            'render_paths': [],
+        }
+
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+            # SaveGLB node (id=13) -> .ply
+            ply_info = outputs.get('13', {}).get('3d', [{}])[0]
+            ply_filename = ply_info.get('filename', '')
+            if ply_filename:
+                ply_path = os.path.join(output_dir, ply_filename)
+                self.download_file(ply_filename, ply_info.get('subfolder', ''),
+                                   ply_info.get('type', 'output'), ply_path)
+                result['ply_path'] = ply_path
+
+            # SaveImage node (id=15) -> rendered images
+            for img_info in outputs.get('15', {}).get('images', []):
+                img_filename = img_info.get('filename', '')
+                if img_filename:
+                    img_path = os.path.join(output_dir, img_filename)
+                    self.download_file(img_filename, img_info.get('subfolder', ''),
+                                       img_info.get('type', 'output'), img_path)
+                    result['render_paths'].append(img_path)
+
+        return result
+
+    def generate_flux_t2i(self, prompt: str, seed: int = None,
+                          width: int = 1024, height: int = 1024,
+                          steps: int = 20, guidance: float = 3.5, cfg: float = 1.0,
+                          filename_prefix: str = 'vidance/flux',
+                          output_path: str = None) -> dict:
+        """FLUX T2I: text prompt → image. Returns {image_path, seed, params}."""
+        if seed is None:
+            seed = random.randint(0, 2**31 - 1)
+
+        template_path = os.path.join(WORKFLOW_DIR, 'flux_t2i.json')
+        with open(template_path, 'r') as f:
+            template = f.read()
+
+        params = {
+            'prompt': prompt,
+            'width': width,
+            'height': height,
+            'steps': steps,
+            'guidance': guidance,
+            'cfg': cfg,
+            'seed': seed,
+            'filename_prefix': filename_prefix,
+        }
+        workflow = render_template(template, params)
+
+        if not self.wait_ready(timeout=60):
+            raise RuntimeError('ComfyUI server not ready')
+
+        prompt_id = self.queue_prompt(workflow)
+        outputs = self.wait_result(prompt_id, timeout=600)
+
+        # SaveImage node (id=9) outputs under 'images' key
+        img_info = outputs.get('9', {}).get('images', [{}])[0]
+        filename = img_info.get('filename', '')
+        subfolder = img_info.get('subfolder', '')
+        file_type = img_info.get('type', 'output')
+
+        if not filename:
+            raise RuntimeError(f'No image in outputs: {outputs}')
+
+        result = {
+            'prompt_id': prompt_id,
+            'seed': seed,
+            'params': params,
+            'filename': filename,
+            'subfolder': subfolder,
+        }
+
+        if output_path:
+            self.download_file(filename, subfolder, file_type, output_path)
+            result['image_path'] = output_path
 
         return result
 

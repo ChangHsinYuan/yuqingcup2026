@@ -2,7 +2,13 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v0 实现见 [v0-design.md](./v0-design.md)
 >
-> **状态：📐 设计中**（未开始实现）
+> **状态：✅ 已完成**（2026-09-08 端到端验证通过，M1-M8 全部完成，I2V bug 已修复，v1.1 角色模式优化完成）
+>
+> **验证结果**：
+> - v1 I2V 修复：概念"一只猫在月球上跳舞"+ 角色"穿宇航服的白猫" → 10.4s 成片（4 镜），I2V 首帧与 composite_ref 相关性 0.977-0.991（Wan22ImageToVideoLatent）。
+> - v1.1 flux 模式：4 镜 16s 成片，I2V 相关性 0.993-0.998，审片全 7 分一次过（比 3DGS 模式重试少、质量更稳定）。
+> - v1.1 auto 模式：3DGS 审查超时(score=5) → 自动降级 flux → 3 镜 8.9s 成片，降级逻辑验证通过。
+> - 3DGS 重建质量是当前瓶颈（一致性 2-4/10），v1.1 通过 flux 模式绕过；v2 探索多图 3D 重建 / IP-Adapter。
 
 ## 1. 概述
 
@@ -167,7 +173,7 @@ director (主控 agent)
 [8] Wan I2V 生成视频
       POST 8189 /prompt (wan_i2v workflow)
       输入: start_image=composite_ref_{id}.png, video_prompt
-      内部: WanImageToVideo(首帧编码→latent) → KSampler → VAEDecode → 视频
+      内部: Wan22ImageToVideoLatent(首帧VAE编码→latent+noise_mask) → KSampler(inpainting) → VAEDecode → 视频
       → shot_{id}.mp4 (角色从参考帧姿态开始运动)
 
 [9] TTS + 抽帧 + 审片 (复用 v0)
@@ -345,22 +351,27 @@ File3DToSplat(character.splat) → RenderSplat ← CreateCameraInfo(yaw,pitch,fo
 
 图生视频。**复用现有 5B ti2v 模型**（ti2v = text+image to video，已支持 I2V）。
 
-关键节点：`WanImageToVideo`（与 T2V 的 `Wan22ImageToVideoLatent` 不同）
+关键节点：`Wan22ImageToVideoLatent`（Wan 2.2 专用 I2V 节点，48ch latent + noise_mask inpainting）
+
+> **I2V 节点选择**（v1 修复）：最初使用 `WanImageToVideo`（Wan 2.1 节点，16ch latent + concat_cond），但 Wan 2.2 ti2v 模型 latent_channels=48 且 in_dim=48 → extra_channels=0 → concat_cond 返回 None → I2V 图片被完全忽略（首帧与输入相关性 -0.26）。改用 `Wan22ImageToVideoLatent` 后，首帧与 composite_ref 相关性 0.977-0.991。
 
 | 维度 | T2V (v0) | I2V (v1) |
 |------|---------|---------|
-| latent 节点 | `Wan22ImageToVideoLatent` | `WanImageToVideo` |
-| start_image | 无 | **有**（首帧注入） |
-| 输出 | LATENT | positive+negative+LATENT（重写conditioning） |
+| latent 节点 | `Wan22ImageToVideoLatent`（空 latent） | `Wan22ImageToVideoLatent`（start_image 注入） |
+| start_image | 无 | **有**（VAE 编码→首帧 latent + noise_mask=0） |
+| 输出 | LATENT（含 noise_mask） | LATENT（含 noise_mask） |
+| 机制 | 纯 T2V | inpainting 式（首帧保留，其余帧去噪） |
 | 模型 | wan2.2_ti2v_5B（复用） | wan2.2_ti2v_5B（复用） |
 | VAE | wan2.2_vae（复用） | wan2.2_vae（复用） |
+| 空间压缩 | 16x（Wan 2.2 VAE） | 16x（Wan 2.2 VAE） |
 
 拓扑（`utils/workflows/wan_i2v.json`）：
 ```
-LoadImage(composite_ref) → WanImageToVideo ← CLIPTextEncode(prompt)
-                                            ← CLIPTextEncode(negative)
-                            ↓ positive/negative/latent
-UNETLoader(ti2v_5B) → ModelSamplingSD3 → KSampler(seed,steps,cfg) → VAEDecode → CreateVideo → VIDEO
+LoadImage(composite_ref) → Wan22ImageToVideoLatent(vae, start_image) → LATENT
+CLIPTextEncode(prompt) ──────────────────────────→ KSampler(positive)
+CLIPTextEncode(negative) ────────────────────────→ KSampler(negative)
+                                                     ↓
+UNETLoader(ti2v_5B) → ModelSamplingSD3 → KSampler(seed,steps,cfg,latent) → VAEDecode → CreateVideo → VIDEO
 VAELoader(wan2.2_vae) ────────────────────────────↑
 CLIPLoader(umt5_xxl) → CLIPTextEncode ×2
 ```
@@ -544,3 +555,47 @@ python core/pipeline.py "一个穿红斗篷的少年在雪原上行走" --charac
 | M8 | 端到端验证 + 角色一致性评估 | v1 成片 |
 
 > 建议从 M1 开始按里程碑推进，每个里程碑独立可验证。
+
+---
+
+## 14. v1.1 角色模式优化（已完成）
+
+### 14.1 背景与问题
+
+v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
+- TripoSplat 单图重建质量不足（262K 高斯，像素覆盖 13-26%，颜色偏暗）
+- 审查反馈"严重崩坏，破碎碎片状，姿态水平漂浮"
+- I2V 忠实复现低质量参考帧（garbage-in-garbage-out），导致角色一致性 2-4/10
+
+### 14.2 优化措施
+
+| 措施 | 说明 |
+|------|------|
+| **I2V 节点修复** | `WanImageToVideo`（16ch concat_cond，被 ti2v 忽略）→ `Wan22ImageToVideoLatent`（48ch + noise_mask inpainting），首帧相关性 0.99+ |
+| **character-mode 开关** | `auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `flux` |
+| **flux 模式** | 跳过 3D 重建，每镜 FLUX 直接生成角色+场景完整图 → Wan I2V（质量最稳定） |
+| **前置镜头 FLUX 替代** | 3dgs 模式下 |yaw|<30 的镜头用 FLUX 生成完整场景图，不走 3DGS 渲染 |
+| **位姿修复** | FLUX 角色 prompt 强调 "standing upright on the ground, natural pose"；review_character 加 pose 维度（4 维评分） |
+| **optimize_scene_prompt** | 新增 LLM 方法，角色+场景组合 FLUX prompt（角色自然融入场景，站立姿态） |
+
+### 14.3 验证结果
+
+| 模式 | 镜数 | 时长 | I2V 相关性 | 审片 | 重试 | 说明 |
+|------|------|------|-----------|------|------|------|
+| flux | 4 | 16s | 0.993-0.998 | 全 7 分 | shot4×1 | 每镜一次过，质量稳定 |
+| auto | 3 | 8.9s | 0.994-0.997 | 7/7/8 | shot3×2 | 3DGS 审查超时→自动降级 flux |
+
+- 输出目录：`output/20260908_163052/`（flux）、`output/20260908_164931/`（auto）
+- flux 模式比 3dgs 模式重试少（3dgs 每镜重试 2-3 次 vs flux 多数一次过）
+
+### 14.4 代码改动
+
+- `core/pipeline.py`：`run()` 加 `character_mode` 参数；`_build_character_anchor` 支持 flux 模式（跳过 3D 重建）；`_process_shot` 按 mode + yaw 分流参考帧
+- `utils/llm.py`：`optimize_character_prompt` 强调站立；新增 `optimize_scene_prompt`；`review_character` 加 pose 维度
+- CLI：`--character-mode auto|3dgs|flux`
+
+### 14.5 后续（v2）
+
+- 多图 3D 重建（多视角输入提升 mesh 质量）
+- 参考图 ControlNet / IP-Adapter 角色锁定
+- flux 模式侧面镜头角色走样问题（无 3D 约束）

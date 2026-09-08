@@ -1,0 +1,17 @@
+{
+  "1": {"class_type": "LoadImage", "inputs": {"image": {{image_filename}}}},
+  "2": {"class_type": "LoadBackgroundRemovalModel", "inputs": {"bg_removal_name": "birefnet.safetensors"}},
+  "3": {"class_type": "RemoveBackground", "inputs": {"bg_removal_model": ["2", 0], "image": ["1", 0]}},
+  "4": {"class_type": "TripoSplatPreprocessImage", "inputs": {"image": ["1", 0], "mask": ["3", 0], "erode_radius": 1, "size": 1024}},
+  "5": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": "dino_v3_vit_h.safetensors"}},
+  "6": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+  "7": {"class_type": "TripoSplatConditioning", "inputs": {"clip_vision": ["5", 0], "vae": ["6", 0], "image": ["4", 0]}},
+  "8": {"class_type": "UNETLoader", "inputs": {"unet_name": "triposplat_fp16.safetensors", "weight_dtype": "default"}},
+  "9": {"class_type": "KSampler", "inputs": {"model": ["8", 0], "seed": {{seed}}, "steps": 20, "cfg": 3, "sampler_name": "dpmpp_2m", "scheduler": "simple", "positive": ["7", 0], "negative": ["7", 1], "latent_image": ["7", 2], "denoise": 1.0}},
+  "10": {"class_type": "VAELoader", "inputs": {"vae_name": "triposplat_vae_decoder_fp16.safetensors"}},
+  "11": {"class_type": "VAEDecodeTripoSplat", "inputs": {"samples": ["9", 0], "vae": ["10", 0], "num_gaussians": {{num_gaussians}}, "seed": {{seed}}}},
+  "12": {"class_type": "SplatToFile3D", "inputs": {"splat": ["11", 0], "format": "ply"}},
+  "13": {"class_type": "SaveGLB", "inputs": {"mesh": ["12", 0], "filename_prefix": {{filename_prefix}}}},
+  "14": {"class_type": "RenderSplat", "inputs": {"splat": ["11", 0], "width": {{width}}, "height": {{height}}, "frames": {{frames}}, "splat_scale": 5.0, "sharpen": 2.0, "headlight_shading": 0.0, "opacity_threshold": 0.0, "background": "#000000", "render_style": "color"}},
+  "15": {"class_type": "SaveImage", "inputs": {"images": ["14", 0], "filename_prefix": {{render_prefix}}}}
+}

@@ -24,7 +24,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  产品层   v0 ✅ 有声短片 → v1 📐 角色一致性 → v2 📐 长视频      │
+│  产品层   v0 ✅ 有声短片 → v1 ✅ 角色一致性 → v2 📐 长视频      │
 │         v3 📐 2D→3D→新视角(⚠️阻塞) → v4 📐 营销号流水线    │
 ├──────────────────────────────────────────────────────────┤
 │  编排层   opencode agent runtime                          │
@@ -55,6 +55,7 @@
 | **HunyuanVideo 13B** | T2V | GPU3 | 8190 | 8891 | 20.1G | 34G（unet 24G bf16 + llava 8.5G + clip_l 235M + vae 471M） | v0 备选/v1+ |
 | **SDXL Base 1.0** | T2I（文生图） | GPU1 | 8191 | 8892 | 31.5G | 8.7G（单文件 6.5G） | v1 备选角色/场景图（FLUX 为主力） |
 | **FLUX.1-dev fp8** | T2I（文生图，高质量） | GPU0 | 8192 | 8893 | 36.2G | 16G（unet 12G + t5 4.6G + vae 320M） | v1 角色生成主力 |
+| **TripoSplat** | 单图→3DGS 高斯 | GPU0 | 8192（共用FLUX） | — | ~4G（运行时） | 3.6G（5文件：triposplat_fp16 + dino_v3 + triposplat_vae_decoder + flux2-vae + birefnet） | v1 角色锚核心 |
 
 - 中文 prompt：SDXL/FLUX 均经 `translate.py`（USTC deepseek-v4-flash）自动中→英翻译
 - HunyuanVideo 中文 tokenizer bug 已修复（`LlamaTokenizerFast` → `PreTrainedTokenizerFast`）
@@ -82,8 +83,6 @@
 
 | 组件 | 能力 | 需要版本 | 模型来源 | 说明 |
 |------|------|---------|---------|------|
-| **TripoSplat** | 单图→3DGS 高斯 | v1 | hf-mirror 5 文件（triposplat_fp16 + dino_v3 + triposplat_vae_decoder + flux2-vae + birefnet 去背） | 角色锚核心，RenderSplat 渲染各视角 |
-| **RenderSplat** | 3DGS→任意视角图像（headless） | v1 | ComfyUI 内置节点 | 配合 CreateCameraInfo(yaw/pitch/fov) |
 | **RIFE / FILM** | 光流插帧（软过渡/慢动作） | v2 | hf-mirror | ComfyUI FrameInterpolate 节点 |
 | **faster-whisper** | STT 语音转文字 | v2+ | hf-mirror large-v3-turbo | 字幕时间轴备选方案（CosyVoice 时间戳不够用时） |
 | **Hunyuan3Dv2** | 图→mesh 重建 | v3 | hf-mirror | 高质量资产导出，headless 渲染需 Isaac Sim/Blender |
@@ -115,21 +114,33 @@
 
 **详细设计与验证记录**：见 [v0-design.md](./v0-design.md)
 
-### v1 — 角色一致性 ⬅ 下一阶段（📐 设计完成）
+### v1 — 角色一致性 ✅ 已完成（含 v1.1 优化）
 
 **目标**：同一角色跨镜头不漂移。
 
+**状态**：2026-09-08 端到端验证通过。v1 角色锚全链路跑通（FLUX→TripoSplat→3DGS→RenderSplat→Wan I2V），I2V bug 已修复（Wan22ImageToVideoLatent，首帧相关性 0.99+）。**v1.1 优化完成**：character-mode 开关（auto/3dgs/flux），flux 模式绕过 3DGS 瓶颈（4 镜 16s 成片，I2V 相关性 0.993-0.998，审片全 7 分一次过），auto 模式 3DGS 审查不过自动降级 flux。M1-M8 全部完成。
+
 ```
-[FLUX 生角色参考图(单图或多视图)]
-  → [TripoSplat: 角色→3DGS]  ← 角色锚，全片唯一
-  → 每镜头:
-      [RenderSplat: 3DGS→该角度参考帧]  (可合成 T2I 生成的背景)
-      → [Wan I2V: 参考帧→视频片段(角色锁定)]
+[FLUX 生角色参考图(1024×1024)]
+  → character-mode 分流:
+    flux: 每镜 FLUX 直接生成角色+场景完整图 → Wan I2V
+    3dgs: [TripoSplat: 角色→3DGS PLY] → 每镜 RenderSplat 按角度渲染 → composite → Wan I2V
+          (|yaw|<30 前置镜头用 FLUX 完整图替代 3DGS)
+    auto: 先走 3dgs + review_character 审查 → 不过则降级 flux
+  → 每镜头: [Wan I2V: 参考帧→视频(832×480×81-120帧)]
+       → [TTS] + [抽帧2张] + [LLM审片5维(含character_consistency)] → 不通过重试≤2次
+  → [ffmpeg+moviepy 合成 final.mp4]
 ```
+
+**已知限制**：
+- 3DGS 重建质量仍是瓶颈：TripoSplat 262K 高斯渲染稀疏（13-26% 像素覆盖）+ 颜色偏暗，character_consistency 2-4/10 → v1.1 通过 flux 模式绕过
+- I2V 已修复：Wan22ImageToVideoLatent（48ch + noise_mask inpainting），首帧相关性 0.99+
+- flux 模式侧面/背面镜头（yaw≠0）角色可能走样，无 3D 约束 → v2 探索 IP-Adapter
+- 多模态审片 API 不稳定（60s timeout + retry + safe fallback）
 
 **新增依赖**：TripoSplat 5 文件（含 BiRefNet 去背）、RenderSplat（ComfyUI 内置）、Wan I2V workflow（复用 5B ti2v，无需下 14B）
 
-**关键**：RenderSplat 的 `bg_image` 合成 = 先 T2I 生成场景背景，再合成角色 → I2V，实现"角色走入场景"。
+**关键**：v1.1 flux 模式 = 每镜 FLUX 直接生成角色+场景图 → I2V，绕过 3DGS 重建瓶颈，质量更稳定。
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 
@@ -190,7 +201,7 @@
 - CosyVoice 放 GPU2（与 Wan 共享，流水线串行不抢资源，余 23G 够 TTS ~2.5G）
 - edge-tts 在线引擎不占 GPU（CPU + 网络）
 - MiniMax-H3（8188/8889）按需拉起，v0 不常驻
-- TripoSplat（v1）拟放 GPU0（与 FLUX 串行共享，推荐）或 GPU1，待实测显存后定
+- TripoSplat 与 FLUX 共用 GPU0:8192 同一 ComfyUI 实例（串行调用，已验证）
 
 ---
 
@@ -225,7 +236,7 @@
 12. **存储分层**：代码/配置/小素材放 sdb（快盘），模型/视频/音频/产出放 mergerfs 机械盘，软链统一访问
 13. **3DGS 角色锚**（v1）：全片唯一 3DGS，每镜 RenderSplat 按角度渲染参考帧喂 I2V，锁定跨镜头角色
 14. **RenderSplat bg_image 合成**（v1）：T2I 生成无角色背景 + 角色按视角 alpha 混合 → 合成参考帧，实现"角色走入场景"
-15. **复用 Wan 5B ti2v 做 I2V**（v1）：ti2v 本身支持 I2V（`WanImageToVideo` 节点有 `start_image`），无需下 14B
+15. **复用 Wan 5B ti2v 做 I2V**（v1）：ti2v 本身支持 I2V（`Wan22ImageToVideoLatent` 节点，48ch latent + noise_mask inpainting），无需下 14B
 16. **审片加 character_consistency 维度**（v1）：与角色参考图对比，五维打分（v0 四维 + 角色一致性）
 
 ---

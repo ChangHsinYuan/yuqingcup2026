@@ -13,7 +13,8 @@
     "wan": {"host": "127.0.0.1", "port": 8189},
     "hunyuan": {"host": "127.0.0.1", "port": 8190},
     "sdxl": {"host": "127.0.0.1", "port": 8191},
-    "flux": {"host": "127.0.0.1", "port": 8192}
+    "flux": {"host": "127.0.0.1", "port": 8192},
+    "triposplat": {"host": "127.0.0.1", "port": 8192}
   },
   "tts": {
     "host": "127.0.0.1",
@@ -44,5 +45,19 @@
     "fps": 24,
     "steps": 20,
     "cfg": 5
+  },
+  "i2v_defaults": {
+    "width": 832,
+    "height": 480,
+    "fps": 24,
+    "steps": 20,
+    "cfg": 5
+  },
+  "flux_defaults": {
+    "character_size": 1024,
+    "background_width": 832,
+    "background_height": 480,
+    "steps": 20,
+    "guidance": 3.5
   }
 }
