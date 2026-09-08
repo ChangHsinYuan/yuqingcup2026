@@ -147,12 +147,13 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 ## 已知限制（v1.1）
 
 1. **3DGS 角色重建质量仍是瓶颈**（character_consistency 2-4/10）：
-   - TripoSplat 262K 高斯渲染稀疏，像素覆盖仅 13-26%（512×512 渲染）
+   - TripoSplat 262K 高斯渲染稀疏，像素覆盖 31-35%（v1.1 位姿修复后提升，原 13-26%）
    - 3DGS 颜色偏暗（mean 0.51 vs FLUX 原图 0.94），宇航服细节丢失
-   - 审查反馈：3D 重建"严重崩坏，破碎的碎片状"，角色姿态错误（水平漂浮而非站立）
-   - **v1.1 缓解**：`flux` 模式跳过 3D 重建，每镜 FLUX 直接生成角色+场景图；`auto` 模式 3DGS 审查不过自动降级 flux
-   - **v1.1 修复**：I2V 用 Wan22ImageToVideoLatent（48ch + noise_mask），首帧与参考图相关性 0.99+；位姿 prompt 强调站立
-   - **后续**：v2 探索多图 3D 重建 / 参考图 ControlNet / IP-Adapter 角色锁定
+   - **v1.1 位姿修复**：`load_ply` PCA 自动对齐角色主轴到垂直（替代手动 Y/Z 交换），`composite_bg` 裁剪角色 bbox → 缩放 55% 画面高 → 接地放置 88% 位置（脚踩地不悬浮）
+   - **v1.1 I2V 修复**：Wan22ImageToVideoLatent（48ch + noise_mask），首帧与参考图相关性 0.99+
+   - **v1.1 缓解**：`flux` 模式跳过 3D 重建；`auto` 模式 3DGS 审查不过自动降级 flux
+   - **剩余问题**：3DGS 稀疏噪声大，部分角度重建质量不均（但 PCA 对齐+接地合成后 review_character 已能通过 score=7）
+   - **后续**：v2 探索多图 3D 重建 / 参考图 ControlNet / IP-Adapter 角色锁定 / 表面平滑
 2. **flux 模式角色一致性依赖 FLUX prompt**：侧面/背面镜头（yaw≠0）FLUX 生成角色可能走样，无 3D 约束
 3. **多模态审片 API 延迟波动大**（12s-200s+）：
    - USTC claude-haiku-4-5 多模态调用不稳定，已加 60s timeout + 1 retry + safe fallback

@@ -44,6 +44,9 @@
 - 模型部署：minimaxH3和qwen3.6-35B-A3B均已部署，底层支持Loop了。现在生成模型的还部署了Wan2.2和Hunyuan，生图的部署了SDXL和FLUX，然后TTS的部署了CosyVoice，然后多模态llm-api接的是ustc的api，其中那些claude系的其实都是qwen之类的不过无所谓了
 
 
+    cd /mnt/disk_sdb/zxy/vidance && /home/zxy/.conda/envs/comfyui/bin/python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode 3dgs --voice edge-xiaoxiao
+
+    cd /mnt/disk_sdb/zxy/vidance && /home/zxy/.conda/envs/comfyui/bin/python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux --voice edge-xiaoxiao
 
 ### 3、发现的问题
 - v0暂时还不错，慢慢改呗

@@ -295,7 +295,7 @@ class Pipeline:
             composite_ref = None
             if character:
                 char_mode = character.get('mode', '3dgs')
-                use_flux_ref = (char_mode == 'flux') or (char_mode == '3dgs' and abs(yaw) < 30)
+                use_flux_ref = (char_mode == 'flux')
 
                 if use_flux_ref:
                     # FLUX 直接生成"角色+场景"完整图（前置镜头或 flux 模式）

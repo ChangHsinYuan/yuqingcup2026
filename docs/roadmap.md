@@ -118,7 +118,7 @@
 
 **目标**：同一角色跨镜头不漂移。
 
-**状态**：2026-09-08 端到端验证通过。v1 角色锚全链路跑通（FLUX→TripoSplat→3DGS→RenderSplat→Wan I2V），I2V bug 已修复（Wan22ImageToVideoLatent，首帧相关性 0.99+）。**v1.1 优化完成**：character-mode 开关（auto/3dgs/flux），flux 模式绕过 3DGS 瓶颈（4 镜 16s 成片，I2V 相关性 0.993-0.998，审片全 7 分一次过），auto 模式 3DGS 审查不过自动降级 flux。M1-M8 全部完成。
+**状态**：2026-09-08 端到端验证通过。v1 角色锚全链路跑通（FLUX→TripoSplat→3DGS→RenderSplat→Wan I2V），I2V bug 已修复（Wan22ImageToVideoLatent，首帧相关性 0.99+）。**v1.1 优化完成**：character-mode 开关（auto/3dgs/flux），flux 模式绕过 3DGS 瓶颈（4 镜 16s 成片，I2V 相关性 0.993-0.998，审片全 7 分一次过），auto 模式 3DGS 审查不过自动降级 flux。**3DGS 位姿修复完成**：PCA 自动对齐（Z-alignment 0.774→1.000）+ 接地合成（crop→scale 55%→ground 88%），review_character 首次通过 score=7（原 score=2）。M1-M8 全部完成。
 
 ```
 [FLUX 生角色参考图(1024×1024)]
@@ -133,14 +133,15 @@
 ```
 
 **已知限制**：
-- 3DGS 重建质量仍是瓶颈：TripoSplat 262K 高斯渲染稀疏（13-26% 像素覆盖）+ 颜色偏暗，character_consistency 2-4/10 → v1.1 通过 flux 模式绕过
+- 3DGS 重建质量仍是瓶颈：TripoSplat 262K 高斯渲染稀疏（13-26% 像素覆盖）+ 颜色偏暗 → v1.1 通过 PCA 对齐+接地合成修复位姿（review_character score 2→7），flux 模式绕过质量瓶颈
 - I2V 已修复：Wan22ImageToVideoLatent（48ch + noise_mask inpainting），首帧相关性 0.99+
+- 3DGS 表面稀疏噪声大（后续可调 min_px/max_px 或提高渲染分辨率平滑）
 - flux 模式侧面/背面镜头（yaw≠0）角色可能走样，无 3D 约束 → v2 探索 IP-Adapter
 - 多模态审片 API 不稳定（60s timeout + retry + safe fallback）
 
 **新增依赖**：TripoSplat 5 文件（含 BiRefNet 去背）、RenderSplat（ComfyUI 内置）、Wan I2V workflow（复用 5B ti2v，无需下 14B）
 
-**关键**：v1.1 flux 模式 = 每镜 FLUX 直接生成角色+场景图 → I2V，绕过 3DGS 重建瓶颈，质量更稳定。
+**关键**：v1.1 flux 模式 = 每镜 FLUX 直接生成角色+场景图 → I2V，绕过 3DGS 重建瓶颈，质量更稳定。3DGS 模式经 PCA 对齐+接地合成后 review_character 首次通过（score=7），角色站立接地不再悬浮。
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 

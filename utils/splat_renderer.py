@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""3DGS (.ply) 多角度渲染器 — 使用 TripoSplat preview 算法（min_px 保证可见性）
+"""3DGS (.ply) 多角度渲染器 — PCA 对齐 + 裁剪接地合成
 
 用法:
   from utils.splat_renderer import render_splat_angles
@@ -19,7 +19,12 @@ _C0 = 0.28209479177387814
 
 
 def load_ply(ply_path):
-    """Load a PLY gaussian splat file, return (xyz, rgb, scale, opacity) numpy arrays."""
+    """Load a PLY gaussian splat file, PCA-align upright, return (xyz, rgb, scale, opacity).
+
+    TripoSplat's 3D reconstruction is not axis-aligned. PCA finds the character's
+    principal axes; the longest dimension is mapped to Z (up), ensuring the
+    character stands vertically regardless of the original orientation.
+    """
     with open(ply_path, 'rb') as f:
         header = b''
         while True:
@@ -27,7 +32,6 @@ def load_ply(ply_path):
             header += line
             if b'end_header' in line:
                 break
-        # Parse vertex count
         n = 0
         props = 0
         for line in header.split(b'\n'):
@@ -38,11 +42,30 @@ def load_ply(ply_path):
         data = f.read(props * 4 * n)
         arr = np.frombuffer(data, dtype=np.float32).reshape(n, props)
 
-    xyz = arr[:, :3]
+    xyz = arr[:, :3].copy().astype(np.float32)
     rgb = np.clip(0.5 + arr[:, 6:9] * _C0, 0, 1)
     scale = np.exp(arr[:, 10:13]).max(axis=1)
     opacity = 1.0 / (1.0 + np.exp(-arr[:, 9]))
-    return xyz, rgb, scale, opacity
+    return _align_upright(xyz, rgb), rgb, scale, opacity
+
+
+def _align_upright(xyz, rgb):
+    """Rotate point cloud so the longest extent axis = Z (up), head at +Z."""
+    center = xyz.mean(axis=0)
+    xyz_c = (xyz - center).astype(np.float32)
+    eigenvalues, eigenvectors = np.linalg.eigh(np.cov(xyz_c.T))
+    idx = np.argsort(eigenvalues)[::-1]
+    eigenvectors = eigenvectors[:, idx].astype(np.float32)
+    xyz_pca = xyz_c @ eigenvectors
+    # largest variance -> Z (up), 2nd -> X (width), 3rd -> Y (depth)
+    xyz_out = np.column_stack([xyz_pca[:, 1], xyz_pca[:, 2], xyz_pca[:, 0]]).astype(np.float32)
+    # Ensure head (brightest) at +Z
+    brightness = rgb.mean(axis=1)
+    top = xyz_out[:, 2] > xyz_out[:, 2].mean()
+    if brightness[top].mean() < brightness[~top].mean():
+        xyz_out[:, 2] = -xyz_out[:, 2]
+    xyz_out -= xyz_out.mean(axis=0)
+    return xyz_out
 
 
 def auto_frame_distance(xyz, fov=35.0):
@@ -53,37 +76,67 @@ def auto_frame_distance(xyz, fov=35.0):
     return float(extent / (math.tan(math.radians(fov) / 2) * 0.9)), center
 
 
-def composite_bg(character_img, bg_path, width, height):
-    """Composite character (on black bg) over a background image."""
+def composite_bg(character_img, bg_path, width, height,
+                 char_height_ratio=0.55, ground_ratio=0.88):
+    """Composite character render onto background: crop to bbox, scale, ground at bottom.
+
+    char_height_ratio: character height as fraction of output height (default 0.55)
+    ground_ratio: vertical position of character feet (0=top, 1=bottom, default 0.88)
+    """
     char = np.array(character_img, dtype=np.float32)
-    mask = (char.sum(axis=2) > 30).astype(np.float32)
-    mask = mask[:, :, None]
+    mask = char.sum(axis=2) > 30
+
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if len(rows) == 0:
+        return Image.open(bg_path).convert('RGB').resize((width, height), Image.LANCZOS)
+
+    # Crop to character bounding box
+    r0, r1 = rows[0], rows[-1] + 1
+    c0, c1 = cols[0], cols[-1] + 1
+    char_crop = char[r0:r1, c0:c1]
+    mask_crop = mask[r0:r1, c0:c1]
+
+    # Scale character to target height
+    target_h = int(height * char_height_ratio)
+    src_h, src_w = char_crop.shape[:2]
+    scale_factor = target_h / src_h
+    target_w = max(1, int(src_w * scale_factor))
+
+    char_pil = Image.fromarray(char_crop.astype(np.uint8)).resize((target_w, target_h), Image.LANCZOS)
+    mask_pil = Image.fromarray((mask_crop.astype(np.uint8) * 255)).resize((target_w, target_h), Image.LANCZOS)
+
+    # Position: bottom-center, feet at ground_ratio
+    paste_x = (width - target_w) // 2
+    paste_y = int(height * ground_ratio) - target_h
 
     bg = Image.open(bg_path).convert('RGB').resize((width, height), Image.LANCZOS)
-    bg_arr = np.array(bg, dtype=np.float32)
-
-    result = char * mask + bg_arr * (1.0 - mask)
-    return Image.fromarray(result.astype(np.uint8))
+    result = bg.copy()
+    result.paste(char_pil, (paste_x, paste_y), mask_pil)
+    return result
 
 
 def render_splat_at_angle(ply_path, yaw, pitch, output_path, bg_image=None,
                           width=832, height=480, fov=35.0,
-                          min_px=3, max_px=15, gain=2.0):
+                          min_px=3, max_px=15, gain=2.0,
+                          char_height_ratio=0.55, ground_ratio=0.88):
     """Render a .ply splat at a specific yaw/pitch, optionally composite over bg.
-    Returns the output path.
 
-    render_splat only supports square output; we render at max(w,h) then resize."""
+    When bg_image is provided, the character is cropped from the splat render,
+    scaled to char_height_ratio of the output height, and grounded at ground_ratio.
+    """
     xyz, rgb, scale, opacity = load_ply(ply_path)
     dist, _ = auto_frame_distance(xyz, fov)
-    sq = max(width, height)
+    sq = max(width, height, 768)
     img = render_splat(xyz, rgb, scale, opacity,
                        yaw=yaw, pitch=pitch, size=sq,
                        min_px=min_px, max_px=max_px, gain=gain,
                        fov=fov, dist=dist)
-    if img.size != (width, height):
-        img = img.resize((width, height), Image.LANCZOS)
     if bg_image:
-        img = composite_bg(img, bg_image, width, height)
+        img = composite_bg(img, bg_image, width, height,
+                           char_height_ratio, ground_ratio)
+    elif img.size != (width, height):
+        img = img.resize((width, height), Image.LANCZOS)
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     img.save(output_path)
     return output_path

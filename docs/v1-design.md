@@ -2,13 +2,13 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v0 实现见 [v0-design.md](./v0-design.md)
 >
-> **状态：✅ 已完成**（2026-09-08 端到端验证通过，M1-M8 全部完成，I2V bug 已修复，v1.1 角色模式优化完成）
+> **状态：✅ 已完成**（2026-09-08 端到端验证通过，M1-M8 全部完成，I2V bug 已修复，v1.1 角色模式优化完成，3DGS PCA 对齐+接地合成位姿修复完成）
 >
 > **验证结果**：
 > - v1 I2V 修复：概念"一只猫在月球上跳舞"+ 角色"穿宇航服的白猫" → 10.4s 成片（4 镜），I2V 首帧与 composite_ref 相关性 0.977-0.991（Wan22ImageToVideoLatent）。
 > - v1.1 flux 模式：4 镜 16s 成片，I2V 相关性 0.993-0.998，审片全 7 分一次过（比 3DGS 模式重试少、质量更稳定）。
 > - v1.1 auto 模式：3DGS 审查超时(score=5) → 自动降级 flux → 3 镜 8.9s 成片，降级逻辑验证通过。
-> - 3DGS 重建质量是当前瓶颈（一致性 2-4/10），v1.1 通过 flux 模式绕过；v2 探索多图 3D 重建 / IP-Adapter。
+> - 3DGS 重建质量是当前瓶颈（一致性 2-4/10），v1.1 通过 flux 模式绕过；3DGS 模式经 PCA 对齐+接地合成后 review_character 通过（score=7）；v2 探索多图 3D 重建 / IP-Adapter。
 
 ## 1. 概述
 
@@ -566,6 +566,7 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 - TripoSplat 单图重建质量不足（262K 高斯，像素覆盖 13-26%，颜色偏暗）
 - 审查反馈"严重崩坏，破碎碎片状，姿态水平漂浮"
 - I2V 忠实复现低质量参考帧（garbage-in-garbage-out），导致角色一致性 2-4/10
+- **位姿问题**：TripoSplat 输出 Y-up 且不轴对齐（PCA 主轴偏离垂直 ~39°，Z-alignment=0.774），角色渲染后倾斜/侧卧/悬浮；旧合成方式角色居中占画面 78-85%，悬浮感强
 
 ### 14.2 优化措施
 
@@ -575,23 +576,28 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 | **character-mode 开关** | `auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `flux` |
 | **flux 模式** | 跳过 3D 重建，每镜 FLUX 直接生成角色+场景完整图 → Wan I2V（质量最稳定） |
 | **前置镜头 FLUX 替代** | 3dgs 模式下 |yaw|<30 的镜头用 FLUX 生成完整场景图，不走 3DGS 渲染 |
-| **位姿修复** | FLUX 角色 prompt 强调 "standing upright on the ground, natural pose"；review_character 加 pose 维度（4 维评分） |
+| **位姿修复（prompt）** | FLUX 角色 prompt 强调 "standing upright on the ground, natural pose"；review_character 加 pose 维度（4 维评分） |
+| **PCA 自动对齐** | `splat_renderer.py:load_ply` 对点云做 PCA，最大方差轴旋转到 Z(垂直)，亮度检测确保头朝上（Z-alignment 0.774→1.000），替代手动 Y/Z 交换 |
+| **接地合成** | `composite_bg` 裁剪角色 bbox → 缩放到 55% 画面高度 → 放到 88% 位置（脚踩地不悬浮），替代旧居中 paste（78-85% 占比悬浮） |
 | **optimize_scene_prompt** | 新增 LLM 方法，角色+场景组合 FLUX prompt（角色自然融入场景，站立姿态） |
 
 ### 14.3 验证结果
 
-| 模式 | 镜数 | 时长 | I2V 相关性 | 审片 | 重试 | 说明 |
-|------|------|------|-----------|------|------|------|
-| flux | 4 | 16s | 0.993-0.998 | 全 7 分 | shot4×1 | 每镜一次过，质量稳定 |
-| auto | 3 | 8.9s | 0.994-0.997 | 7/7/8 | shot3×2 | 3DGS 审查超时→自动降级 flux |
+| 模式 | 镜数 | 时长 | I2V 相关性 | 审片 | 重试 | review_character | 说明 |
+|------|------|------|-----------|------|------|-----------------|------|
+| flux | 4 | 16s | 0.993-0.998 | 全 7 分 | shot4×1 | — | 每镜一次过，质量稳定 |
+| auto | 3 | 8.9s | 0.994-0.997 | 7/7/8 | shot3×2 | score=5 超时 | 3DGS 审查超时→自动降级 flux |
+| 3dgs（PCA+接地） | 3 | 7.2s | 0.986-0.998 | 全 7 分 | shot1×3 | **score=7 通过** | PCA 对齐+接地合成后 review_character 首次通过 |
 
-- 输出目录：`output/20260908_163052/`（flux）、`output/20260908_164931/`（auto）
+- 输出目录：`output/20260908_163052/`（flux）、`output/20260908_164931/`（auto）、`output/20260908_203615/`（3dgs PCA+接地）
 - flux 模式比 3dgs 模式重试少（3dgs 每镜重试 2-3 次 vs flux 多数一次过）
+- 3dgs 模式 review_character 进展：score=2（原版）→ score=4（Y/Z交换）→ **score=7 通过**（PCA 对齐+接地合成）
 
 ### 14.4 代码改动
 
 - `core/pipeline.py`：`run()` 加 `character_mode` 参数；`_build_character_anchor` 支持 flux 模式（跳过 3D 重建）；`_process_shot` 按 mode + yaw 分流参考帧
 - `utils/llm.py`：`optimize_character_prompt` 强调站立；新增 `optimize_scene_prompt`；`review_character` 加 pose 维度
+- `utils/splat_renderer.py`：`load_ply` 加 `_align_upright()` PCA 对齐（eigh 特征向量→最大方差映射 Z，亮度检测头朝上）；`composite_bg` 重写为 crop bbox → scale 55% → ground 88%
 - CLI：`--character-mode auto|3dgs|flux`
 
 ### 14.5 后续（v2）
@@ -599,3 +605,4 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 - 多图 3D 重建（多视角输入提升 mesh 质量）
 - 参考图 ControlNet / IP-Adapter 角色锁定
 - flux 模式侧面镜头角色走样问题（无 3D 约束）
+- 表面平滑优化（增大 min_px/max_px 或提高渲染分辨率，减少 3DGS 稀疏噪声）
