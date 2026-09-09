@@ -175,8 +175,9 @@ class Pipeline:
             audio_paths=all_audios,
             srt_path=srt_path,
             output_path=output_path,
-            transition='crossfade',
+            transition='cut' if transition_clips else 'crossfade',
             transition_duration=0.3,
+            transition_clips=transition_clips or None,
         )
 
         meta['output'] = output_path
@@ -432,6 +433,59 @@ class Pipeline:
         }
 
 
+    def _generate_transitions(self, clips: list, clips_dir: str, task_id: str) -> list:
+        """生成镜头间 RIFE 过渡视频。
+
+        Args:
+            clips: 视频片段路径列表
+            clips_dir: 片段目录
+            task_id: 任务 ID
+
+        Returns:
+            过渡视频路径列表（长度 = len(clips) - 1）
+        """
+        model = self.rife_config.get('model', 'rife_v4.26.safetensors')
+        multiplier = self.rife_config.get('multiplier', 8)
+        fps = self.rife_config.get('fps', 24)
+
+        try:
+            client = RIFEClient(config=self.config, instance='wan', model_name=model)
+        except Exception as e:
+            print(f'  ⚠ RIFE client init failed: {e}, skipping transitions')
+            return []
+
+        transitions = []
+        trans_dir = os.path.join(clips_dir, 'transitions')
+        os.makedirs(trans_dir, exist_ok=True)
+
+        for i in range(len(clips) - 1):
+            clip_a = clips[i]
+            clip_b = clips[i + 1]
+            print(f'  transition {i+1}→{i+2}: ...', end=' ', flush=True)
+
+            try:
+                n_a = get_video_frame_count(clip_a)
+                n_b = get_video_frame_count(clip_b)
+                frame_a = os.path.join(trans_dir, f'trans_{i}_frameA.png')
+                frame_b = os.path.join(trans_dir, f'trans_{i}_frameB.png')
+                rife_extract_frame(clip_a, max(0, n_a - 1), frame_a)
+                rife_extract_frame(clip_b, 0, frame_b)
+
+                output = os.path.join(trans_dir, f'trans_{i}.mp4')
+                result = client.interpolate_transition(
+                    frame_a, frame_b, output,
+                    multiplier=multiplier, fps=fps,
+                    filename_prefix=f'vidance/{task_id}/trans_{i}',
+                )
+                print(f'{result["frame_count"]} frames')
+                transitions.append(output)
+            except Exception as e:
+                print(f'failed: {e}')
+                transitions.append(None)
+
+        return transitions
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Vidance v1 pipeline')
@@ -443,9 +497,13 @@ if __name__ == '__main__':
                         help='Character anchor mode: auto(3DGS→flux降级) / 3dgs / flux (default: auto)')
     parser.add_argument('--voice', default=None,
                         help='TTS voice (e.g. edge-moe, cosy-default)')
+    parser.add_argument('--no-rife', action='store_true',
+                        help='Disable RIFE frame interpolation transitions')
     args = parser.parse_args()
 
     pipeline = Pipeline()
+    if args.no_rife:
+        pipeline.rife_config['enabled'] = False
     meta = pipeline.run(args.concept, output_path=args.output,
                         character_desc=args.character, voice=args.voice,
                         character_mode=args.character_mode)

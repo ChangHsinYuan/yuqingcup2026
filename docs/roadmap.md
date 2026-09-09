@@ -145,17 +145,19 @@
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 
-### v2 — 长视频
+### v2 — 长视频（🚧 进行中）
 
 **目标**：超出单次生成上限的长片 + 完整后期。**建立在 v1 角色一致性之上**（长片仍需跨镜头角色不漂移）。
 
-- **RIFE 光流插帧**：片段间软过渡（替代硬拼接），也可做慢动作
-- **ffmpeg 调色/配乐**：完整后期链路
-- **STT 字幕**：若 CosyVoice 时间戳不够精确，引入 faster-whisper 对齐
-- **MiniMax-H3 音画同步**：评估是否用于带原生音频的片段
-- **逐镜并行**：v0/v1 同步执行，v2 可引入镜头级并行生成（仍非异步队列）
+**状态**：M1 RIFE 光流插帧已完成并验证通过（2026-09-09）。3 镜+2 过渡=15.4s 成片，镜头间光流过渡 0.375s@24fps。剩余 M2-M5 进行中。
 
-**新增依赖**：RIFE 模型、faster-whisper（视字幕方案）、配乐素材库
+- **M1 RIFE 光流插帧** ✅：片段间软过渡（替代硬拼接），也可做慢动作。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成，config `rife.enabled/multiplier=8`
+- **M2 镜头并行** 🔲：v0/v1 同步执行，v2 引入镜头级 ThreadPool 并行生成
+- **M3 ffmpeg 调色** 🔲：LUT 调色 + 开源 LUT 库自动下载
+- **M4 配乐 ducking** 🔲：BGM 自动下载 + 配音时 ducking 降音量
+- **M5 STT 字幕兜底** 🔲：faster-whisper 对齐（CosyVoice 时间戳不够用时）
+
+**新增依赖**：RIFE 模型 ✅、faster-whisper（视字幕方案）、配乐素材库
 
 **详细设计**：见 [v2-design.md](./v2-design.md)（📐 设计完成）
 
