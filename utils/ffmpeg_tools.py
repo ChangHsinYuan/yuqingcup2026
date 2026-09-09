@@ -107,8 +107,11 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
             output_path: str = 'output/final.mp4',
             transition: str = 'crossfade',
             transition_duration: float = 0.3,
-            transition_clips: list = None) -> str:
-    """合成最终视频：拼接画面 + 合并配音 + 烧录字幕
+            transition_clips: list = None,
+            lut_path: str = None,
+            bgm_path: str = None,
+            bgm_volume: float = 0.3) -> str:
+    """合成最终视频：拼接画面 + 合并配音 + 调色 + 烧录字幕 + 配乐 ducking
 
     Args:
         clips: 视频片段路径列表 [shot_1.mp4, shot_2.mp4, ...]
@@ -119,6 +122,9 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
         transition_duration: 转场时长（秒）
         transition_clips: 镜头间过渡视频路径列表 [trans_1.mp4, trans_2.mp4, ...]
                          长度 = len(clips) - 1，None 则不用 RIFE 过渡
+        lut_path: 3D LUT .cube 文件路径（None 则不调色）
+        bgm_path: 背景音乐文件路径（None 则不加配乐）
+        bgm_volume: BGM 基础音量 (0-1)
     """
     from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
     from moviepy.video.fx import CrossFadeIn, Freeze
@@ -170,11 +176,20 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
     for ac in all_audio_clips:
         ac.close()
 
+    # 后处理：调色 + 烧录字幕
+    filters = []
+    if lut_path and os.path.isfile(lut_path):
+        filters.append(f"lut3d='{lut_path}'")
     if srt_path and os.path.isfile(srt_path):
-        subtitle_filter = f"subtitles='{srt_path}':force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2'"
+        filters.append(
+            f"subtitles='{srt_path}':force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2'"
+        )
+
+    if filters:
+        vf = ','.join(filters)
         cmd = [
             FFMPEG, '-y', '-i', temp_output,
-            '-vf', subtitle_filter,
+            '-vf', vf,
             '-c:a', 'copy',
             '-c:v', 'libx264',
             '-preset', 'medium',
@@ -185,6 +200,25 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
         os.remove(temp_output)
     else:
         shutil.move(temp_output, output_path)
+
+    # 配乐 ducking：BGM 在旁白时自动降低音量
+    if bgm_path and os.path.isfile(bgm_path):
+        temp_bgm = output_path.replace('.mp4', '_nobgm.mp4')
+        shutil.move(output_path, temp_bgm)
+        cmd = [
+            FFMPEG, '-y', '-i', temp_bgm, '-i', bgm_path,
+            '-filter_complex',
+            f'[1:a]volume={bgm_volume}[bgm];'
+            f'[bgm][0:a]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[ducked];'
+            f'[0:a][ducked]amix=inputs=2:duration=first:weights=1 0.8[a]',
+            '-map', '0:v', '-map', '[a]',
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            output_path,
+        ]
+        _run(cmd, timeout=600)
+        os.remove(temp_bgm)
 
     return output_path
 

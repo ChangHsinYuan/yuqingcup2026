@@ -65,5 +65,18 @@
     "model": "rife_v4.26.safetensors",
     "multiplier": 8,
     "fps": 24
+  },
+  "color": {
+    "enabled": true,
+    "lut_dir": "/mnt/disk_sdb/zxy/vidance/utils/luts",
+    "styles": ["cinematic", "warm", "cool", "vintage", "vivid", "soft"],
+    "default_style": "cinematic"
+  },
+  "bgm": {
+    "enabled": true,
+    "moods": ["calm", "uplifting", "mysterious", "dramatic", "playful"],
+    "default_mood": "calm",
+    "volume": 0.3,
+    "custom_dir": "/mnt/disk_sdb/zxy/vidance/bgm"
   }
 }

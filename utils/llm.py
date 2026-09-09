@@ -226,6 +226,88 @@ class LLMClient:
         ]
         return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
 
+    def select_lut(self, concept: str, script: dict, available_styles: list) -> str:
+        """根据脚本内容自动选择最佳 LUT 调色风格。
+
+        Args:
+            concept: 用户概念描述
+            script: 编剧脚本 dict（含 title, shots）
+            available_styles: 可用 LUT 风格列表
+
+        Returns:
+            选中的风格名（如 'cinematic'）
+        """
+        style_descs = {
+            'cinematic': '青橙色调，经典电影感，适合冒险/剧情/史诗',
+            'warm': '暖金色调，温馨柔和，适合日常/治愈/家庭',
+            'cool': '冷蓝色调，清冷神秘，适合夜景/科幻/悬疑',
+            'vintage': '复古褪色，怀旧质感，适合回忆/纪录片/复古',
+            'vivid': '高饱和高对比，鲜艳夺目，适合旅游/风景/广告',
+            'soft': '柔和 pastel，淡雅梦幻，适合童话/浪漫/治愈',
+        }
+        options = '\n'.join(
+            f'- {s}: {style_descs.get(s, s)}' for s in available_styles
+        )
+
+        system = (
+            '你是视频调色师。根据视频概念和分镜内容，选择最合适的调色风格。\n'
+            f'可选风格：\n{options}\n'
+            '只输出风格名称（如 cinematic），不要加任何解释。'
+        )
+        shots_summary = '; '.join(
+            f"镜头{s['id']}：{s.get('scene_desc', '')}" for s in script.get('shots', [])
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'概念：{concept}\n标题：{script.get("title", "")}\n分镜：{shots_summary}'},
+        ]
+        result = self.chat(messages, model=self.models['prompt_opt'], temperature=0.3).strip().lower()
+        # 验证返回值
+        for style in available_styles:
+            if style in result:
+                return style
+        return available_styles[0]
+
+    def select_bgm_mood(self, concept: str, script: dict, available_moods: list) -> str:
+        """根据脚本内容自动选择最佳 BGM 配乐风格。
+
+        Args:
+            concept: 用户概念描述
+            script: 编剧脚本 dict
+            available_moods: 可用 BGM 风格列表
+
+        Returns:
+            选中的风格名（如 'calm'）
+        """
+        mood_descs = {
+            'calm': '平静冥想，低频和声，适合治愈/日常/自然',
+            'uplifting': '振奋向上，大调琶音，适合冒险/励志/旅行',
+            'mysterious': '神秘悬疑，小二度不协和，适合悬疑/探索/夜景',
+            'dramatic': '戏剧紧张，低频脉冲，适合战斗/紧张/冲突',
+            'playful': '活泼俏皮，五声音阶跳跃，适合童趣/搞笑/轻松',
+        }
+        options = '\n'.join(
+            f'- {m}: {mood_descs.get(m, m)}' for m in available_moods
+        )
+
+        system = (
+            '你是视频配乐师。根据视频概念和分镜内容，选择最合适的配乐风格。\n'
+            f'可选风格：\n{options}\n'
+            '只输出风格名称（如 calm），不要加任何解释。'
+        )
+        shots_summary = '; '.join(
+            f"镜头{s['id']}：{s.get('scene_desc', '')}" for s in script.get('shots', [])
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'概念：{concept}\n标题：{script.get("title", "")}\n分镜：{shots_summary}'},
+        ]
+        result = self.chat(messages, model=self.models['prompt_opt'], temperature=0.3).strip().lower()
+        for mood in available_moods:
+            if mood in result:
+                return mood
+        return available_moods[0]
+
     def review_shot(self, scene_desc: str, frame_paths: list,
                     model: str = None, character_ref: str = None) -> dict:
         """多模态审片：关键帧+场景描述→{score, dimensions, feedback, pass}

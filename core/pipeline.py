@@ -15,6 +15,7 @@ import sys
 import time
 import random
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,6 +25,7 @@ from utils.comfy_api import ComfyClient
 from utils.splat_renderer import render_splat_at_angle, render_splat_angles
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
 from utils.rife import RIFEClient, extract_frame as rife_extract_frame, get_video_frame_count
+from utils.music import generate_bgm
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
 
@@ -45,11 +47,14 @@ class Pipeline:
         self.i2v_defaults = self.config.get('i2v_defaults', {})
         self.flux_defaults = self.config.get('flux_defaults', {})
         self.rife_config = self.config.get('rife', {})
+        self.color_config = self.config.get('color', {})
+        self.bgm_config = self.config.get('bgm', {})
         self.max_retries = 2
 
     def run(self, concept: str, output_path: str = None,
             character_desc: str = None, voice: str = None,
-            character_mode: str = 'auto') -> dict:
+            character_mode: str = 'auto', lut_override: str = None,
+            bgm_override: str = None) -> dict:
         """端到端生成有声短片
 
         character_mode:
@@ -138,11 +143,22 @@ class Pipeline:
         all_timestamps = []
         audio_offset = 0.0
 
+        # 4a. 并行预取：FLUX 参考帧 + TTS 配音（与 Wan I2V 独立）
+        i2v_w = self.i2v_defaults.get('width', 832)
+        i2v_h = self.i2v_defaults.get('height', 480)
+        bg_w = self.flux_defaults.get('background_width', i2v_w)
+        bg_h = self.flux_defaults.get('background_height', i2v_h)
+        prefetched = self._prefetch_shots(
+            script['shots'], character, clips_dir, task_id,
+            voice, i2v_w, i2v_h, bg_w, bg_h,
+        )
+
         for shot in script['shots']:
             sid = shot['id']
             print(f'\n=== [4] shot {sid} 生成 ===')
             clip_info = self._process_shot(
-                shot, clips_dir, task_id, character, voice
+                shot, clips_dir, task_id, character, voice,
+                prefetched=prefetched.get(sid),
             )
             meta['clips'].append(clip_info)
             all_clips.append(clip_info['final_video'])
@@ -170,6 +186,23 @@ class Pipeline:
         srt_path = os.path.join(task_dir, 'subtitle.srt')
         generate_srt(all_timestamps, srt_path)
 
+        # ── 5.5 调色 ──
+        lut_path = None
+        if self.color_config.get('enabled', False) or lut_override:
+            print(f'\n=== [5.5] 调色 ===')
+            lut_path = self._select_lut(concept, script, task_dir, lut_override)
+            if lut_path:
+                print(f'  LUT: {os.path.basename(lut_path)}')
+
+        # ── 5.6 配乐 ──
+        bgm_path = None
+        if self.bgm_config.get('enabled', False) or bgm_override:
+            print(f'\n=== [5.6] 配乐 ===')
+            total_duration = audio_offset + 2.0
+            bgm_path = self._select_bgm(concept, script, task_dir, total_duration, bgm_override)
+            if bgm_path:
+                print(f'  BGM: {os.path.basename(bgm_path)}')
+
         compose(
             clips=all_clips,
             audio_paths=all_audios,
@@ -178,10 +211,15 @@ class Pipeline:
             transition='cut' if transition_clips else 'crossfade',
             transition_duration=0.3,
             transition_clips=transition_clips or None,
+            lut_path=lut_path,
+            bgm_path=bgm_path,
+            bgm_volume=self.bgm_config.get('volume', 0.3),
         )
 
         meta['output'] = output_path
         meta['srt'] = srt_path
+        meta['lut'] = lut_path
+        meta['bgm'] = bgm_path
         meta['status'] = 'completed'
 
         meta_path = os.path.join(task_dir, 'meta.json')
@@ -271,9 +309,82 @@ class Pipeline:
             'mode': '3dgs',
         }
 
+    def _generate_scene_ref(self, shot: dict, character: dict, clips_dir: str,
+                            task_id: str, i2v_w: int, i2v_h: int,
+                            bg_w: int, bg_h: int) -> str:
+        """生成镜头参考帧（FLUX 场景图 或 3DGS 合成图）。可并行调用。"""
+        sid = shot['id']
+        camera = shot.get('camera', {})
+        yaw = camera.get('yaw', 0)
+        pitch = camera.get('pitch', 15)
+        fov = camera.get('fov', 35)
+
+        char_mode = character.get('mode', '3dgs')
+        use_flux_ref = (char_mode == 'flux')
+
+        if use_flux_ref:
+            scene_prompt = self.llm.optimize_scene_prompt(
+                character['desc'], shot['scene_desc'], shot.get('style', '')
+            )
+            composite_ref = os.path.join(clips_dir, f'composite_ref_{sid}.png')
+            self.flux.generate_flux_t2i(
+                prompt=scene_prompt,
+                seed=random.randint(0, 2**31 - 1),
+                width=i2v_w, height=i2v_h,
+                steps=self.flux_defaults.get('steps', 20),
+                guidance=self.flux_defaults.get('guidance', 3.5),
+                filename_prefix=f'{task_id}/sceneref_{sid}',
+                output_path=composite_ref,
+            )
+            print(f'  [prefetch] scene_ref (flux, yaw={yaw}): {sid}')
+            return composite_ref
+        else:
+            bg_path = os.path.join(clips_dir, f'background_{sid}.png')
+            self.flux.generate_flux_t2i(
+                prompt=shot['background_prompt'],
+                seed=random.randint(0, 2**31 - 1),
+                width=bg_w, height=bg_h,
+                steps=self.flux_defaults.get('steps', 20),
+                guidance=self.flux_defaults.get('guidance', 3.5),
+                filename_prefix=f'{task_id}/bg_{sid}',
+                output_path=bg_path,
+            )
+            composite_ref = os.path.join(clips_dir, f'composite_ref_{sid}.png')
+            render_splat_at_angle(
+                ply_path=character['ply_path'],
+                yaw=yaw, pitch=pitch,
+                output_path=composite_ref,
+                bg_image=bg_path,
+                width=i2v_w, height=i2v_h,
+                fov=fov,
+            )
+            print(f'  [prefetch] composite_ref (3dgs, yaw={yaw}): {sid}')
+            return composite_ref
+
+    def _generate_tts(self, shot: dict, clips_dir: str, voice: str) -> dict:
+        """生成镜头配音。可并行调用。"""
+        sid = shot['id']
+        audio_path = os.path.join(clips_dir, f'shot_{sid}.wav')
+        tts_result = self.tts.synthesize(
+            text=shot['narration'],
+            output_path=audio_path,
+            voice=voice,
+        )
+        print(f'  [prefetch] tts: shot {sid} ({tts_result["duration"]:.1f}s)')
+        return {
+            'audio_path': audio_path,
+            'duration': tts_result['duration'],
+            'timestamps': tts_result['timestamps'],
+        }
+
     def _process_shot(self, shot: dict, clips_dir: str, task_id: str,
-                      character: dict = None, voice: str = None) -> dict:
-        """处理单个镜头：背景生成 → 合成参考帧 → I2V + TTS + 抽帧 + 审片 + 重试"""
+                      character: dict = None, voice: str = None,
+                      prefetched: dict = None) -> dict:
+        """处理单个镜头：背景生成 → 合成参考帧 → I2V + TTS + 抽帧 + 审片 + 重试
+
+        Args:
+            prefetched: 预取数据 {'composite_ref': str, 'audio': dict} 或 None
+        """
         sid = shot['id']
         duration = shot.get('duration', 5)
         fps = self.i2v_defaults.get('fps', 24)
@@ -284,9 +395,6 @@ class Pipeline:
         bg_h = self.flux_defaults.get('background_height', i2v_h)
 
         camera = shot.get('camera', {})
-        yaw = camera.get('yaw', 0)
-        pitch = camera.get('pitch', 15)
-        fov = camera.get('fov', 35)
 
         attempts = []
         best = None
@@ -300,51 +408,17 @@ class Pipeline:
 
             print(f'  attempt {attempt}, seed={seed}, length={length}')
 
-            # 参考帧生成
+            # 参考帧生成（首次尝试用预取数据，重试时重新生成）
             composite_ref = None
             if character:
-                char_mode = character.get('mode', '3dgs')
-                use_flux_ref = (char_mode == 'flux')
-
-                if use_flux_ref:
-                    # FLUX 直接生成"角色+场景"完整图（前置镜头或 flux 模式）
-                    scene_prompt = self.llm.optimize_scene_prompt(
-                        character['desc'], shot['scene_desc'], shot.get('style', '')
-                    )
-                    composite_ref = os.path.join(clips_dir, f'composite_ref_{sid}.png')
-                    self.flux.generate_flux_t2i(
-                        prompt=scene_prompt,
-                        seed=random.randint(0, 2**31 - 1),
-                        width=i2v_w, height=i2v_h,
-                        steps=self.flux_defaults.get('steps', 20),
-                        guidance=self.flux_defaults.get('guidance', 3.5),
-                        filename_prefix=f'{task_id}/sceneref_{sid}',
-                        output_path=composite_ref,
-                    )
-                    print(f'  scene_ref (flux, yaw={yaw}): {composite_ref}')
+                if attempt == 1 and prefetched and prefetched.get('composite_ref'):
+                    composite_ref = prefetched['composite_ref']
+                    print(f'  [prefetched] composite_ref: {composite_ref}')
                 else:
-                    # 3DGS 侧面镜头：FLUX 生成背景 + RenderSplat 合成
-                    bg_path = os.path.join(clips_dir, f'background_{sid}.png')
-                    self.flux.generate_flux_t2i(
-                        prompt=shot['background_prompt'],
-                        seed=random.randint(0, 2**31 - 1),
-                        width=bg_w, height=bg_h,
-                        steps=self.flux_defaults.get('steps', 20),
-                        guidance=self.flux_defaults.get('guidance', 3.5),
-                        filename_prefix=f'{task_id}/bg_{sid}',
-                        output_path=bg_path,
+                    composite_ref = self._generate_scene_ref(
+                        shot, character, clips_dir, task_id,
+                        i2v_w, i2v_h, bg_w, bg_h,
                     )
-
-                    composite_ref = os.path.join(clips_dir, f'composite_ref_{sid}.png')
-                    render_splat_at_angle(
-                        ply_path=character['ply_path'],
-                        yaw=yaw, pitch=pitch,
-                        output_path=composite_ref,
-                        bg_image=bg_path,
-                        width=i2v_w, height=i2v_h,
-                        fov=fov,
-                    )
-                    print(f'  composite_ref (3dgs, yaw={yaw}): {composite_ref}')
 
             # [8] Wan I2V (或 T2V fallback)
             if composite_ref:
@@ -375,14 +449,23 @@ class Pipeline:
                 )
             print(f'  video: {video_path}')
 
-            # [9] TTS
-            audio_path = os.path.join(clips_dir, f'shot_{sid}.wav')
-            tts_result = self.tts.synthesize(
-                text=shot['narration'],
-                output_path=audio_path,
-                voice=voice,
-            )
-            print(f'  audio: {audio_path} ({tts_result["duration"]:.1f}s)')
+            # [9] TTS（首次尝试用预取数据）
+            if attempt == 1 and prefetched and prefetched.get('audio'):
+                audio_info = prefetched['audio']
+                audio_path = audio_info['audio_path']
+                tts_result = {
+                    'duration': audio_info['duration'],
+                    'timestamps': audio_info['timestamps'],
+                }
+                print(f'  [prefetched] audio: {audio_path} ({tts_result["duration"]:.1f}s)')
+            else:
+                audio_path = os.path.join(clips_dir, f'shot_{sid}.wav')
+                tts_result = self.tts.synthesize(
+                    text=shot['narration'],
+                    output_path=audio_path,
+                    voice=voice,
+                )
+                print(f'  audio: {audio_path} ({tts_result["duration"]:.1f}s)')
 
             # 抽帧
             frames = extract_frames(video_path, n_frames=2,
@@ -432,6 +515,89 @@ class Pipeline:
             },
         }
 
+
+    def _prefetch_shots(self, shots: list, character: dict, clips_dir: str,
+                        task_id: str, voice: str,
+                        i2v_w: int, i2v_h: int, bg_w: int, bg_h: int) -> dict:
+        """并行预取所有镜头的 FLUX 参考帧 + TTS 配音。
+
+        FLUX 在 GPU0:8192，TTS 在 9880，与 Wan I2V (GPU2:8189) 独立。
+        使用 ThreadPoolExecutor 并行提交，结果按 shot id 索引返回。
+
+        Returns:
+            {shot_id: {'composite_ref': str, 'audio': dict}}
+        """
+        if not character:
+            # v0 纯 T2V：只预取 TTS
+            results = {}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = {}
+                for shot in shots:
+                    futures[pool.submit(self._generate_tts, shot, clips_dir, voice)] = shot['id']
+                for fut in as_completed(futures):
+                    sid = futures[fut]
+                    try:
+                        results[sid] = {'audio': fut.result()}
+                    except Exception as e:
+                        print(f'  [prefetch] tts failed for shot {sid}: {e}')
+                        results[sid] = {}
+            return results
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {}
+            for shot in shots:
+                sid = shot['id']
+                futures[pool.submit(self._generate_scene_ref, shot, character,
+                                    clips_dir, task_id, i2v_w, i2v_h, bg_w, bg_h)] = ('ref', sid)
+                futures[pool.submit(self._generate_tts, shot, clips_dir, voice)] = ('tts', sid)
+
+            for fut in as_completed(futures):
+                kind, sid = futures[fut]
+                if sid not in results:
+                    results[sid] = {}
+                try:
+                    if kind == 'ref':
+                        results[sid]['composite_ref'] = fut.result()
+                    else:
+                        results[sid]['audio'] = fut.result()
+                except Exception as e:
+                    print(f'  [prefetch] {kind} failed for shot {sid}: {e}')
+
+        print(f'  [prefetch] done: {len(results)} shots')
+        return results
+
+    def _select_lut(self, concept: str, script: dict, task_dir: str,
+                    override: str = None) -> str:
+        """选择调色 LUT 文件路径。
+
+        Args:
+            concept: 用户概念
+            script: 编剧脚本
+            override: 手动指定风格名（None 则 LLM 自动选择）
+
+        Returns:
+            LUT .cube 文件路径，或 None
+        """
+        lut_dir = self.color_config.get('lut_dir',
+                                         os.path.join(os.path.dirname(__file__), '..', 'utils', 'luts'))
+        styles = self.color_config.get('styles', ['cinematic'])
+
+        if override:
+            style = override
+        else:
+            try:
+                style = self.llm.select_lut(concept, script, styles)
+            except Exception as e:
+                print(f'  ⚠ LUT selection failed: {e}, using default')
+                style = self.color_config.get('default_style', styles[0])
+
+        lut_path = os.path.join(lut_dir, f'{style}.cube')
+        if not os.path.isfile(lut_path):
+            print(f'  ⚠ LUT file not found: {lut_path}, skipping color grading')
+            return None
+
+        return lut_path
 
     def _generate_transitions(self, clips: list, clips_dir: str, task_id: str) -> list:
         """生成镜头间 RIFE 过渡视频。
@@ -499,12 +665,20 @@ if __name__ == '__main__':
                         help='TTS voice (e.g. edge-moe, cosy-default)')
     parser.add_argument('--no-rife', action='store_true',
                         help='Disable RIFE frame interpolation transitions')
+    parser.add_argument('--lut', default=None,
+                        choices=['cinematic', 'warm', 'cool', 'vintage', 'vivid', 'soft'],
+                        help='Color grading LUT style (auto-select if not specified)')
+    parser.add_argument('--no-color', action='store_true',
+                        help='Disable color grading')
     args = parser.parse_args()
 
     pipeline = Pipeline()
     if args.no_rife:
         pipeline.rife_config['enabled'] = False
+    if args.no_color:
+        pipeline.color_config['enabled'] = False
     meta = pipeline.run(args.concept, output_path=args.output,
                         character_desc=args.character, voice=args.voice,
-                        character_mode=args.character_mode)
+                        character_mode=args.character_mode,
+                        lut_override=args.lut)
     print(f'\nDone: {meta["output"]}')
