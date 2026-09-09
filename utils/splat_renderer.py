@@ -46,7 +46,9 @@ def load_ply(ply_path):
     rgb = np.clip(0.5 + arr[:, 6:9] * _C0, 0, 1)
     scale = np.exp(arr[:, 10:13]).max(axis=1)
     opacity = 1.0 / (1.0 + np.exp(-arr[:, 9]))
-    return _align_upright(xyz, rgb), rgb, scale, opacity
+    xyz = _align_upright(xyz, rgb)
+    xyz, rgb, scale, opacity = _filter_floaters(xyz, rgb, scale, opacity)
+    return xyz, rgb, scale, opacity
 
 
 def _align_upright(xyz, rgb):
@@ -66,6 +68,16 @@ def _align_upright(xyz, rgb):
         xyz_out[:, 2] = -xyz_out[:, 2]
     xyz_out -= xyz_out.mean(axis=0)
     return xyz_out
+
+
+def _filter_floaters(xyz, rgb, scale, opacity,
+                     dist_percentile=99.0, min_opacity=0.03):
+    """Remove isolated low-opacity gaussians (floaters) that cause sparse noise."""
+    center = xyz.mean(axis=0)
+    dists = np.linalg.norm(xyz - center, axis=1)
+    dist_thresh = np.percentile(dists, dist_percentile)
+    keep = (dists <= dist_thresh) & (opacity >= min_opacity)
+    return xyz[keep], rgb[keep], scale[keep], opacity[keep]
 
 
 def auto_frame_distance(xyz, fov=35.0):
@@ -118,7 +130,8 @@ def composite_bg(character_img, bg_path, width, height,
 
 def render_splat_at_angle(ply_path, yaw, pitch, output_path, bg_image=None,
                           width=832, height=480, fov=35.0,
-                          min_px=3, max_px=15, gain=2.0,
+                          min_px=5, max_px=20, gain=3.0,
+                          supersample=2,
                           char_height_ratio=0.55, ground_ratio=0.88):
     """Render a .ply splat at a specific yaw/pitch, optionally composite over bg.
 
@@ -128,10 +141,15 @@ def render_splat_at_angle(ply_path, yaw, pitch, output_path, bg_image=None,
     xyz, rgb, scale, opacity = load_ply(ply_path)
     dist, _ = auto_frame_distance(xyz, fov)
     sq = max(width, height, 768)
+    ssq = int(sq * supersample)
     img = render_splat(xyz, rgb, scale, opacity,
-                       yaw=yaw, pitch=pitch, size=sq,
-                       min_px=min_px, max_px=max_px, gain=gain,
+                       yaw=yaw, pitch=pitch, size=ssq,
+                       min_px=min_px * supersample,
+                       max_px=max_px * supersample,
+                       gain=gain,
                        fov=fov, dist=dist)
+    if supersample > 1:
+        img = img.resize((sq, sq), Image.LANCZOS)
     if bg_image:
         img = composite_bg(img, bg_image, width, height,
                            char_height_ratio, ground_ratio)
@@ -144,7 +162,8 @@ def render_splat_at_angle(ply_path, yaw, pitch, output_path, bg_image=None,
 
 def render_splat_angles(ply_path, angles=8, output_dir='.', size=1024,
                         bg_image=None, pitch=15.0, fov=35.0,
-                        min_px=3, max_px=15, gain=2.0,
+                        min_px=5, max_px=20, gain=3.0,
+                        supersample=2,
                         filename_prefix='render'):
     """Render a .ply splat from multiple yaw angles, save PNGs. Returns list of paths."""
     os.makedirs(output_dir, exist_ok=True)
@@ -154,10 +173,15 @@ def render_splat_angles(ply_path, angles=8, output_dir='.', size=1024,
     paths = []
     for i in range(angles):
         yaw = 360.0 * i / angles
+        ssq = int(size * supersample)
         img = render_splat(xyz, rgb, scale, opacity,
-                           yaw=yaw, pitch=pitch, size=size,
-                           min_px=min_px, max_px=max_px, gain=gain,
+                           yaw=yaw, pitch=pitch, size=ssq,
+                           min_px=min_px * supersample,
+                           max_px=max_px * supersample,
+                           gain=gain,
                            fov=fov, dist=dist)
+        if supersample > 1:
+            img = img.resize((size, size), Image.LANCZOS)
         if bg_image:
             img = composite_bg(img, bg_image, size, size)
         path = os.path.join(output_dir, f'{filename_prefix}_{i:03d}.png')

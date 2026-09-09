@@ -575,10 +575,10 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 | **I2V 节点修复** | `WanImageToVideo`（16ch concat_cond，被 ti2v 忽略）→ `Wan22ImageToVideoLatent`（48ch + noise_mask inpainting），首帧相关性 0.99+ |
 | **character-mode 开关** | `auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `flux` |
 | **flux 模式** | 跳过 3D 重建，每镜 FLUX 直接生成角色+场景完整图 → Wan I2V（质量最稳定） |
-| **前置镜头 FLUX 替代** | 3dgs 模式下 |yaw|<30 的镜头用 FLUX 生成完整场景图，不走 3DGS 渲染 |
 | **位姿修复（prompt）** | FLUX 角色 prompt 强调 "standing upright on the ground, natural pose"；review_character 加 pose 维度（4 维评分） |
 | **PCA 自动对齐** | `splat_renderer.py:load_ply` 对点云做 PCA，最大方差轴旋转到 Z(垂直)，亮度检测确保头朝上（Z-alignment 0.774→1.000），替代手动 Y/Z 交换 |
 | **接地合成** | `composite_bg` 裁剪角色 bbox → 缩放到 55% 画面高度 → 放到 88% 位置（脚踩地不悬浮），替代旧居中 paste（78-85% 占比悬浮） |
+| **3DGS 渲染优化** | 飞点过滤（距离>99th pct + opacity<0.03）+ 超采样渲染（2x→LANCZOS 缩放）+ 大高斯参数（min_px 3→5, gain 2→3），LLM 确认表面更平滑噪声更少 |
 | **optimize_scene_prompt** | 新增 LLM 方法，角色+场景组合 FLUX prompt（角色自然融入场景，站立姿态） |
 
 ### 14.3 验证结果
@@ -588,16 +588,18 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 | flux | 4 | 16s | 0.993-0.998 | 全 7 分 | shot4×1 | — | 每镜一次过，质量稳定 |
 | auto | 3 | 8.9s | 0.994-0.997 | 7/7/8 | shot3×2 | score=5 超时 | 3DGS 审查超时→自动降级 flux |
 | 3dgs（PCA+接地） | 3 | 7.2s | 0.986-0.998 | 全 7 分 | shot1×3 | **score=7 通过** | PCA 对齐+接地合成后 review_character 首次通过 |
+| 3dgs（+渲染优化） | 3 | 8.9s | 0.981-0.998 | 7/7/4 | shot2×2, shot3×3 | score=5 超时 | 飞点过滤+超采样+大高斯；shot3 要求特写但 3DGS 只能全身（镜头类型受限） |
 
-- 输出目录：`output/20260908_163052/`（flux）、`output/20260908_164931/`（auto）、`output/20260908_203615/`（3dgs PCA+接地）
+- 输出目录：`output/20260908_163052/`（flux）、`output/20260908_164931/`（auto）、`output/20260908_203615/`（3dgs PCA+接地）、`output/20260908_231712/`（3dgs 渲染优化）
 - flux 模式比 3dgs 模式重试少（3dgs 每镜重试 2-3 次 vs flux 多数一次过）
 - 3dgs 模式 review_character 进展：score=2（原版）→ score=4（Y/Z交换）→ **score=7 通过**（PCA 对齐+接地合成）
+- 渲染优化 LLM 对比验证：4 角度均确认"表面更平滑、噪声显著减少、几乎无可见伪影"
 
 ### 14.4 代码改动
 
 - `core/pipeline.py`：`run()` 加 `character_mode` 参数；`_build_character_anchor` 支持 flux 模式（跳过 3D 重建）；`_process_shot` 按 mode + yaw 分流参考帧
 - `utils/llm.py`：`optimize_character_prompt` 强调站立；新增 `optimize_scene_prompt`；`review_character` 加 pose 维度
-- `utils/splat_renderer.py`：`load_ply` 加 `_align_upright()` PCA 对齐（eigh 特征向量→最大方差映射 Z，亮度检测头朝上）；`composite_bg` 重写为 crop bbox → scale 55% → ground 88%
+- `utils/splat_renderer.py`：`load_ply` 加 `_align_upright()` PCA 对齐（eigh 特征向量→最大方差映射 Z，亮度检测头朝上）；`_filter_floaters()` 过滤孤立低不透明度高斯（距离>99th percentile 或 opacity<0.03）；`composite_bg` 重写为 crop bbox → scale 55% → ground 88%；渲染参数 min_px 3→5、max_px 15→20、gain 2→3、supersample=2（2x 渲染后 LANCZOS 缩放抗锯齿）
 - CLI：`--character-mode auto|3dgs|flux`
 
 ### 14.5 后续（v2）
@@ -605,4 +607,4 @@ v1 端到端验证发现 3DGS 角色重建是核心瓶颈：
 - 多图 3D 重建（多视角输入提升 mesh 质量）
 - 参考图 ControlNet / IP-Adapter 角色锁定
 - flux 模式侧面镜头角色走样问题（无 3D 约束）
-- 表面平滑优化（增大 min_px/max_px 或提高渲染分辨率，减少 3DGS 稀疏噪声）
+- 3DGS 镜头类型受限：只能全身体远景/中景，无法特写（LLM 编剧可能要求 close-up 但 3DGS 渲染固定距离）

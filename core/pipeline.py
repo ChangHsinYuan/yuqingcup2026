@@ -434,7 +434,7 @@ if __name__ == '__main__':
     parser.add_argument('--character-mode', default='auto', choices=['auto', '3dgs', 'flux'],
                         help='Character anchor mode: auto(3DGS→flux降级) / 3dgs / flux (default: auto)')
     parser.add_argument('--voice', default=None,
-                        help='TTS voice (e.g. edge-xiaoxiao, cosy-default)')
+                        help='TTS voice (e.g. edge-moe, cosy-default)')
     args = parser.parse_args()
 
     pipeline = Pipeline()

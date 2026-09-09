@@ -13,7 +13,8 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
 - **character-mode 开关**：`auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `flux`（每镜 FLUX 直接生成角色+场景图，不重建 3D）
-- **前置镜头用 FLUX 原图替代 3DGS**：3dgs 模式下 |yaw|<30 的镜头直接用 FLUX 生成角色+场景完整图，不走 3DGS 渲染
+- **3DGS 位姿修复**：PCA 自动对齐角色主轴到垂直 + 裁剪接地合成（脚踩地不悬浮）
+- **3DGS 渲染优化**：飞点过滤 + 超采样渲染 + 大高斯参数，表面更平滑噪声更少
 - **角色位姿修复**：FLUX 角色 prompt 强调 "standing upright on the ground"，审查加 pose 维度
 - 不传 `--character` 时走 v0 纯 T2V
 
@@ -51,13 +52,13 @@ vidance/
 ### 全自动生成短片（v1.1 角色一致性）
 ```bash
 # auto 模式（默认）：先试 3DGS，审查不过自动降级 flux
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --voice edge-xiaoxiao
+python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫"
 
 # flux 模式：每镜 FLUX 直接生成角色+场景图，不重建 3D（推荐，质量更稳定）
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux --voice edge-xiaoxiao
+python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux
 
-# 3dgs 模式：强制 3DGS 角色锚（|yaw|<30 前置镜头仍用 FLUX 原图）
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode 3dgs --voice edge-xiaoxiao
+# 3dgs 模式：强制 3DGS 角色锚，所有镜头走 3DGS 渲染
+python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode 3dgs
 ```
 
 ### v0 纯 T2V（无角色锚）
@@ -99,7 +100,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | `cosy-*` | CosyVoice（本地 GPU，可克隆） | `cosy-default` / `cosy-cross` |
 | `cosy-<自定义>` | CosyVoice 自定义克隆 | 在 `voices/<名>/prompt.wav` 放素材自动注册 |
 
-试听样本：`vidance/voice_samples/`（17 个 wav）。默认音色 `edge-xiaoxiao`（config.json）。
+试听样本：`vidance/voice_samples/`（17 个 wav）。默认音色 `edge-moe`（config.json，萌系高音-哈基米风）。
 
 ## 服务端口
 
@@ -123,7 +124,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 6. **元数据完整**：每次任务记录 meta.json（脚本/prompt/seed/审片/时间戳）
 7. **角色锚流程**（v1.1）：`--character` 传入角色描述 → FLUX 生角色参考图 → 按 `--character-mode` 分流：
    - `flux`：每镜 FLUX 直接生成角色+场景完整图 → Wan I2V（不重建 3D，质量最稳定）
-   - `3dgs`：FLUX 图 → TripoSplat→3DGS → 每镜 RenderSplat 按角度渲染 → composite bg → Wan I2V（|yaw|<30 前置镜头用 FLUX 原图替代）
+   - `3dgs`：FLUX 图 → TripoSplat→3DGS → 每镜 RenderSplat 按角度渲染 → composite bg → Wan I2V（所有镜头强制 3DGS）
    - `auto`（默认）：先走 3DGS 流程 + review_character 审查，不过则自动降级 flux
 8. **审片 5 维**（v1）：consistency/quality/motion/artifact/character_consistency，与角色参考图对比
 9. **审片图片缩放**：上传前 resize 到 768px + JPEG 85%（原始 832×480 太大导致 API 超时）
@@ -152,7 +153,8 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
    - **v1.1 位姿修复**：`load_ply` PCA 自动对齐角色主轴到垂直（替代手动 Y/Z 交换），`composite_bg` 裁剪角色 bbox → 缩放 55% 画面高 → 接地放置 88% 位置（脚踩地不悬浮）
    - **v1.1 I2V 修复**：Wan22ImageToVideoLatent（48ch + noise_mask），首帧与参考图相关性 0.99+
    - **v1.1 缓解**：`flux` 模式跳过 3D 重建；`auto` 模式 3DGS 审查不过自动降级 flux
-   - **剩余问题**：3DGS 稀疏噪声大，部分角度重建质量不均（但 PCA 对齐+接地合成后 review_character 已能通过 score=7）
+   - **v1.1 渲染优化**：`_filter_floaters` 过滤孤立高斯（距离>99th pct + opacity<0.03），渲染参数 min_px 3→5、gain 2→3、supersample=2（2x 渲染→LANCZOS 缩放），LLM 确认"噪声显著减少，表面更平滑"
+   - **剩余问题**：3DGS 镜头类型受限（只能全身远景/中景，无法特写），部分角度重建质量不均
    - **后续**：v2 探索多图 3D 重建 / 参考图 ControlNet / IP-Adapter 角色锁定 / 表面平滑
 2. **flux 模式角色一致性依赖 FLUX prompt**：侧面/背面镜头（yaw≠0）FLUX 生成角色可能走样，无 3D 约束
 3. **多模态审片 API 延迟波动大**（12s-200s+）：

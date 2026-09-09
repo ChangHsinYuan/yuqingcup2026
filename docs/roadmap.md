@@ -125,7 +125,7 @@
   → character-mode 分流:
     flux: 每镜 FLUX 直接生成角色+场景完整图 → Wan I2V
     3dgs: [TripoSplat: 角色→3DGS PLY] → 每镜 RenderSplat 按角度渲染 → composite → Wan I2V
-          (|yaw|<30 前置镜头用 FLUX 完整图替代 3DGS)
+          (所有镜头强制 3DGS)
     auto: 先走 3dgs + review_character 审查 → 不过则降级 flux
   → 每镜头: [Wan I2V: 参考帧→视频(832×480×81-120帧)]
        → [TTS] + [抽帧2张] + [LLM审片5维(含character_consistency)] → 不通过重试≤2次
@@ -133,9 +133,9 @@
 ```
 
 **已知限制**：
-- 3DGS 重建质量仍是瓶颈：TripoSplat 262K 高斯渲染稀疏（13-26% 像素覆盖）+ 颜色偏暗 → v1.1 通过 PCA 对齐+接地合成修复位姿（review_character score 2→7），flux 模式绕过质量瓶颈
+- 3DGS 重建质量仍是瓶颈：TripoSplat 262K 高斯渲染稀疏 → v1.1 通过 PCA 对齐+接地合成修复位姿（review_character score 2→7），飞点过滤+超采样+大高斯提升表面平滑度（LLM 确认噪声显著减少），flux 模式绕过质量瓶颈
 - I2V 已修复：Wan22ImageToVideoLatent（48ch + noise_mask inpainting），首帧相关性 0.99+
-- 3DGS 表面稀疏噪声大（后续可调 min_px/max_px 或提高渲染分辨率平滑）
+- 3DGS 镜头类型受限：只能全身体远景/中景，无法特写
 - flux 模式侧面/背面镜头（yaw≠0）角色可能走样，无 3D 约束 → v2 探索 IP-Adapter
 - 多模态审片 API 不稳定（60s timeout + retry + safe fallback）
 
