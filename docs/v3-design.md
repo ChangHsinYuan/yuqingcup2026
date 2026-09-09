@@ -2,7 +2,7 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1/v2 见 [v1-design.md](./v1-design.md)/[v2-design.md](./v2-design.md)
 >
-> **状态：📐 设计中**（未开始实现，依赖 v2 完成）
+> **状态：📐 设计中**（未开始实现，v2 已完成可启动，⚠️ headless 渲染阻塞待解）
 >
 > **⚠️ 已知阻塞**：mesh 渲染到新视角图像无纯 Python headless 节点，需先解决渲染方案（见 §10）。
 

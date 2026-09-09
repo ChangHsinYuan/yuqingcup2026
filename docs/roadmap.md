@@ -24,7 +24,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  产品层   v0 ✅ 有声短片 → v1 ✅ 角色一致性 → v2 📐 长视频      │
+│  产品层   v0 ✅ 有声短片 → v1 ✅ 角色一致性 → v2 ✅ 长视频       │
 │         v3 📐 2D→3D→新视角(⚠️阻塞) → v4 📐 营销号流水线    │
 ├──────────────────────────────────────────────────────────┤
 │  编排层   opencode agent runtime                          │
@@ -35,8 +35,8 @@
 │         T2V: Wan2.2 / HunyuanVideo / MiniMax-H3           │
 │         3D:  TripoSplat(3DGS) / Hunyuan3D(mesh) / RenderSplat │
 │         音频: edge-tts(在线自然) + CosyVoice 2(本地克隆, 9880) │
-│              faster-whisper (STT备选, v2+)                      │
-│         后处理: ffmpeg + moviepy + RIFE(插帧)              │
+│              faster-whisper (STT兜底, large-v3-turbo, 9880)     │
+│         后处理: ffmpeg + moviepy + RIFE(插帧) + LUT(调色) + BGM(配乐) │
 │         LLM: USTC API (编剧 + 多模态审片)                  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -145,19 +145,21 @@
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 
-### v2 — 长视频（🚧 进行中）
+### v2 — 长视频（✅ 已完成）
 
 **目标**：超出单次生成上限的长片 + 完整后期。**建立在 v1 角色一致性之上**（长片仍需跨镜头角色不漂移）。
 
-**状态**：M1 RIFE 光流插帧已完成并验证通过（2026-09-09）。3 镜+2 过渡=15.4s 成片，镜头间光流过渡 0.375s@24fps。剩余 M2-M5 进行中。
+**状态**：2026-09-09 全部完成。M1-M5 端到端验证通过（3 镜+2 过渡=14.9s 成片，RIFE 过渡+并行预取+cinematic 调色+uplifting 配乐 ducking+STT 字幕）。
 
-- **M1 RIFE 光流插帧** ✅：片段间软过渡（替代硬拼接），也可做慢动作。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成，config `rife.enabled/multiplier=8`
-- **M2 镜头并行** 🔲：v0/v1 同步执行，v2 引入镜头级 ThreadPool 并行生成
-- **M3 ffmpeg 调色** 🔲：LUT 调色 + 开源 LUT 库自动下载
-- **M4 配乐 ducking** 🔲：BGM 自动下载 + 配音时 ducking 降音量
-- **M5 STT 字幕兜底** 🔲：faster-whisper 对齐（CosyVoice 时间戳不够用时）
+- **M1 RIFE 光流插帧** ✅：镜头间光流过渡（rife_v4.26，multiplier=8，0.375s@24fps），替代 crossfade 硬拼接。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成
+- **M2 镜头并行预取** ✅：ThreadPoolExecutor 并行预取所有镜头的 FLUX 参考帧（GPU0）+ TTS 配音（9880），与 Wan I2V（GPU2）串行执行不冲突，总耗时显著缩短
+- **M3 ffmpeg 调色** ✅：6 种 3D LUT（cinematic/warm/cool/vintage/vivid/soft），纯 numpy 生成（`gen_luts.py`），LLM 根据脚本内容自动选风格，`--lut` 手动指定
+- **M4 配乐 ducking** ✅：5 种 BGM（calm/uplifting/mysterious/dramatic/playful），纯 numpy 合成（`music.py`），ffmpeg sidechaincompress 配音时自动降 BGM 音量，LLM 自动选 mood
+- **M5 faster-whisper STT** ✅：large-v3-turbo 模型（int8_float16 GPU），成片音频转写→SRT→重新烧录字幕，`--stt` 开关，TTS 时间戳的兜底方案
 
-**新增依赖**：RIFE 模型 ✅、faster-whisper（视字幕方案）、配乐素材库
+**新增依赖**：RIFE 模型 ✅、faster-whisper ✅、scipy（BGM 合成）、无外部下载（LUT+BGM 均程序生成）
+
+**CLI 新增参数**：`--no-rife` / `--lut <style>` / `--no-color` / `--bgm <mood>` / `--no-bgm` / `--stt`
 
 **详细设计**：见 [v2-design.md](./v2-design.md)（📐 设计完成）
 
@@ -269,7 +271,7 @@ vidance/
 │   ├── roadmap.md             # 本文档
 │   ├── v0-design.md           # v0 详细设计（✅ 已完成）
 │   ├── v1-design.md           # v1 角色一致性设计（📐 设计完成）
-│   ├── v2-design.md           # v2 长视频+完整后期设计（📐 设计完成）
+│   ├── v2-design.md           # v2 长视频+完整后期设计（✅ 已完成）
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（📐 设计完成，⚠️ 阻塞）
 │   ├── v4-design.md           # v4 营销号流水线设计（📐 设计完成）
 │   ├── hierachy.md

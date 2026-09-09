@@ -78,5 +78,13 @@
     "default_mood": "calm",
     "volume": 0.3,
     "custom_dir": "/mnt/disk_sdb/zxy/vidance/bgm"
+  },
+  "stt": {
+    "enabled": false,
+    "model_name": "large-v3-turbo",
+    "model_path": "/mnt/dataset/zxy/hf_cache/hub/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/snapshots/0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+    "language": "zh",
+    "device": "cuda",
+    "compute_type": "int8_float16"
   }
 }

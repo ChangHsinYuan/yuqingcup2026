@@ -194,6 +194,7 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
             '-c:v', 'libx264',
             '-preset', 'medium',
             '-crf', '18',
+            '-pix_fmt', 'yuv420p',
             output_path,
         ]
         _run(cmd, timeout=600)

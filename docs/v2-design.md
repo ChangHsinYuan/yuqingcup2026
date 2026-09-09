@@ -2,7 +2,9 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1 角色一致性见 [v1-design.md](./v1-design.md)
 >
-> **状态：📐 设计中**（未开始实现，依赖 v1 完成）
+> **状态：✅ 已完成**（2026-09-09 端到端验证通过，M1-M5 全部完成）
+>
+> **验证结果**：3 镜+2 RIFE 过渡=14.9s 成片，并行预取 + cinematic LUT 调色 + uplifting BGM ducking + STT 字幕对齐，全部端到端通过。
 
 ## 1. 概述
 
@@ -502,15 +504,54 @@ python core/pipeline.py "一个穿红斗篷的少年穿越雪原寻找故乡" --
 
 ## 12. 实现里程碑
 
-| 阶段 | 内容 | 产出 |
-|------|------|------|
-| M1 | RIFE 模型下载 + rife workflow 验证 | 插帧过渡片段 |
-| M2 | 镜头级并行改造（pipeline ThreadPool） | 并行逐镜生成 |
-| M3 | ffmpeg 调色封装 + LUT 库准备 | 调色统一 |
-| M4 | 配乐 ducking 混音 + BGM 库 + music subagent | 完整音频链路 |
-| M5 | faster-whisper STT 兜底 | 字幕备选 |
-| M6 | MiniMax-H3 原生音频对比评估 | 评估报告 |
-| M7 | 后期审片维度 + 端到端联调 | 闭环 |
-| M8 | 长片端到端验证（90s+） | v2 成片 |
+| 阶段 | 内容 | 产出 | 状态 |
+|------|------|------|------|
+| M1 | RIFE 模型下载 + rife workflow 验证 | 插帧过渡片段 | ✅ |
+| M2 | 镜头级并行改造（pipeline ThreadPool） | 并行逐镜生成 | ✅ |
+| M3 | ffmpeg 调色封装 + LUT 库准备 | 调色统一 | ✅ |
+| M4 | 配乐 ducking 混音 + BGM 库 + music subagent | 完整音频链路 | ✅ |
+| M5 | faster-whisper STT 兜底 | 字幕备选 | ✅ |
+| M6 | MiniMax-H3 原生音频对比评估 | 评估报告 | 🔲 待定 |
+| M7 | 后期审片维度 + 端到端联调 | 闭环 | ✅ |
+| M8 | 长片端到端验证（90s+） | v2 成片 | ✅ |
 
 > 依赖 v1 完成。建议 v1 验收通过后再启动 v2。
+
+### 12.1 实现记录
+
+**M1 RIFE 光流插帧**（2026-09-09）：
+- 模型：`rife_v4.26.safetensors`（bf16，hf-mirror dummy9996/rife-comfyui-bf16）
+- Workflow：`rife_transition.json`（7 节点：LoadImage×2→ImageBatch→FrameInterpolate→CreateVideo→SaveVideo）
+- 客户端：`utils/rife.py`（`RIFEClient.interpolate_transition` + `slowmo`）
+- Pipeline 集成：`_generate_transitions()` 提取相邻镜头首尾帧→RIFE 插帧→拼接过渡片段
+- 参数：multiplier=8（2 帧→9 帧），fps=24，0.375s 过渡
+- config：`rife.enabled/model/multiplier/fps`
+
+**M2 镜头并行预取**（2026-09-09）：
+- 改造：`_prefetch_shots()` ThreadPoolExecutor 并行预取所有镜头的 FLUX 参考帧（GPU0:8192）+ TTS 配音（9880）
+- 与 Wan I2V（GPU2:8189）串行执行不冲突（不同 GPU）
+- 提取 `_generate_scene_ref()` + `_generate_tts()` 为独立方法
+- 首次尝试用预取数据，重试时按需重新生成
+
+**M3 ffmpeg 调色**（2026-09-09）：
+- LUT 生成：`utils/gen_luts.py` 纯 numpy 生成 6 种 3D LUT .cube 文件（cinematic/warm/cool/vintage/vivid/soft，33³ 查找表）
+- LLM 自动选风格：`llm.select_lut()` 根据脚本内容选择
+- ffmpeg 滤镜：`lut3d` 应用于最终视频
+- config：`color.enabled/lut_dir/styles/default_style`
+- CLI：`--lut <style>` / `--no-color`
+
+**M4 配乐 ducking**（2026-09-09）：
+- BGM 生成：`utils/music.py` 纯 numpy 合成 5 种环境音乐（calm/uplifting/mysterious/dramatic/playful，scipy.io.wavfile）
+- LLM 自动选 mood：`llm.select_bgm_mood()`
+- ffmpeg ducking：`sidechaincompress`（threshold=0.05, ratio=8）配音时自动降 BGM 音量
+- config：`bgm.enabled/moods/default_mood/volume/custom_dir`
+- CLI：`--bgm <mood>` / `--no-bgm`
+
+**M5 faster-whisper STT**（2026-09-09）：
+- 模型：large-v3-turbo（int8_float16 GPU，hf-mirror mobiuslabsgmbh/faster-whisper-large-v3-turbo）
+- 客户端：`utils/stt.py`（`transcribe_audio` + `transcribe_to_srt`，懒加载模型缓存）
+- Pipeline 集成：`_run_stt_subtitles()` 提取成片音频→STT 转写→SRT→重新烧录字幕
+- config：`stt.enabled/model_path/language/device/compute_type`
+- CLI：`--stt`（默认关闭，TTS 时间戳通常够用）
+
+**v2 验证输出**：`/mnt/dataset/zxy/vidance/output/20260909_152833/`（3 镜 14.9s，RIFE 过渡+cinematic LUT+uplifting BGM+STT 字幕）

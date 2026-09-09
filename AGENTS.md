@@ -6,9 +6,16 @@
 
 Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核心流程：中文概念→LLM编剧→Wan T2V生成→双引擎TTS配音→多模态审片→ffmpeg合成→有声短片。
 
-**当前状态：v1.1 角色一致性优化完成**（2026-09-08），详见 [docs/v1-design.md](./docs/v1-design.md)。
+**当前状态：v2 长视频完成**（2026-09-09），详见 [docs/v2-design.md](./docs/v2-design.md)。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
+
+**v2 长视频**（M1-M5 全部完成）：
+- **M1 RIFE 光流插帧**：镜头间光流过渡（rife_v4.26，multiplier=8，0.375s@24fps）
+- **M2 镜头并行预取**：ThreadPool 并行预取 FLUX 参考帧 + TTS 配音（与 Wan I2V 串行不冲突）
+- **M3 ffmpeg 调色**：6 种 3D LUT（cinematic/warm/cool/vintage/vivid/soft），纯 numpy 生成，LLM 自动选风格
+- **M4 配乐 ducking**：5 种 BGM（calm/uplifting/mysterious/dramatic/playful），纯 numpy 合成，sidechaincompress ducking
+- **M5 faster-whisper STT**：large-v3-turbo 模型，成片音频转写→SRT→重新烧录字幕
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -32,13 +39,20 @@ vidance/
 │   ├── tts.py                 # TTS 客户端（双引擎：edge-tts + CosyVoice）
 │   ├── tts_server.py          # TTS FastAPI 服务（双引擎，GPU2:9880）
 │   ├── splat_renderer.py      # 3DGS PLY 多角度渲染器（render_splat_at_angle + composite_bg）
-│   ├── ffmpeg_tools.py        # 抽帧/SRT/合成
+│   ├── ffmpeg_tools.py        # 抽帧/SRT/合成（含 LUT 调色 + BGM ducking）
+│   ├── rife.py                # v2 RIFE 插帧客户端（镜头间过渡 + slowmo）
+│   ├── gen_luts.py            # v2 生成 3D LUT .cube 文件（6 种风格）
+│   ├── music.py               # v2 生成环境配乐 BGM（5 种风格，numpy 合成）
+│   ├── stt.py                 # v2 faster-whisper STT 转写（字幕兜底）
+│   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
 │       ├── wan_i2v.json       # Wan I2V workflow 模板（12 节点，Wan22ImageToVideoLatent）
 │       ├── triposplat.json    # TripoSplat 单图→PLY workflow（13 节点）
-│       └── flux_t2i.json      # FLUX T2I workflow 模板（10 节点）
+│       ├── flux_t2i.json      # FLUX T2I workflow 模板（10 节点）
+│       └── rife_transition.json  # v2 RIFE 插帧 workflow（7 节点）
 ├── voices/                    # 自定义 CosyVoice 克隆音色素材目录
+├── bgm/                       # v2 自定义 BGM 素材目录（放 {mood}.wav 自动使用）
 ├── .opencode/
 │   ├── agents/{director,reviewer}.md
 │   └── skills/{scriptwriting,review}/SKILL.md
@@ -49,16 +63,22 @@ vidance/
 
 ## 运行命令
 
-### 全自动生成短片（v1.1 角色一致性）
+### 全自动生成短片（v2 长视频 + v1.1 角色一致性）
 ```bash
-# auto 模式（默认）：先试 3DGS，审查不过自动降级 flux
+# v2 全功能：RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕
+python core/pipeline.py "雪山日出：小狐狸的第一次冒险" --character "红色小狐狸" --character-mode flux --stt
+
+# v1.1 auto 模式（默认）：先试 3DGS，审查不过自动降级 flux
 python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫"
 
 # flux 模式：每镜 FLUX 直接生成角色+场景图，不重建 3D（推荐，质量更稳定）
 python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux
 
-# 3dgs 模式：强制 3DGS 角色锚，所有镜头走 3DGS 渲染
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode 3dgs
+# 指定调色风格和配乐 mood
+python core/pipeline.py "深海探险" --character "蓝色水母" --character-mode flux --lut cool --bgm mysterious
+
+# 禁用部分功能
+python core/pipeline.py "概念" --character "角色" --no-rife --no-color --no-bgm
 ```
 
 ### v0 纯 T2V（无角色锚）
@@ -129,19 +149,25 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 8. **审片 5 维**（v1）：consistency/quality/motion/artifact/character_consistency，与角色参考图对比
 9. **审片图片缩放**：上传前 resize 到 768px + JPEG 85%（原始 832×480 太大导致 API 超时）
 10. **审片超时处理**：60s timeout + 1 retry，失败则 safe fallback auto-pass（不阻塞流水线）
+11. **RIFE 过渡**（v2）：镜头间提取首尾帧 → RIFE 光流插帧（multiplier=8）→ 0.375s 过渡片段，config `rife.enabled`
+12. **镜头并行预取**（v2）：ThreadPool 并行预取 FLUX 参考帧 + TTS 配音，与 Wan I2V 串行不冲突
+13. **LUT 调色**（v2）：6 种 3D LUT 程序生成（`gen_luts.py`），LLM 自动选风格，ffmpeg `lut3d` 滤镜，config `color.enabled`
+14. **BGM ducking**（v2）：5 种 BGM 程序合成（`music.py`），ffmpeg `sidechaincompress` 配音时自动降 BGM，config `bgm.enabled`
+15. **STT 字幕兜底**（v2）：faster-whisper large-v3-turbo 转写成片音频→SRT→重新烧录，`--stt` 开关，默认关闭（TTS 时间戳通常够用）
 
 ## Python 环境
 
 - **主环境 (comfyui)**：`/home/zxy/.conda/envs/comfyui/bin/python`（torch 2.13+cu130）
-  - 用于：pipeline、comfy_api、llm、ffmpeg_tools、moviepy
+  - 用于：pipeline、comfy_api、llm、ffmpeg_tools、moviepy、rife、stt、music、gen_luts
 - **TTS 环境 (cosyvoice)**：`/home/zxy/.conda/envs/cosyvoice/bin/python`（torch 2.3.1+cu121）
   - 用于：tts_server（CosyVoice 推理）
+- **STT 模型**：`/mnt/dataset/zxy/hf_cache/hub/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/`（int8_float16 GPU，HF_HOME 指向 hf_cache）
 
 ## LLM 模型
 
 | 模型 | 用途 |
 |------|------|
-| deepseek-v4-flash | 编剧、prompt 优化 |
+| deepseek-v4-flash | 编剧、prompt 优化、LUT 风格选择、BGM mood 选择 |
 | claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
 | claude-sonnet-4-6 | 审片备选（review_strict，534s/镜太慢） |
 
@@ -161,3 +187,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
    - USTC claude-haiku-4-5 多模态调用不稳定，已加 60s timeout + 1 retry + safe fallback
    - 多数审片实际 auto-pass（超时降级），仅前 2 次成功返回详细反馈
 4. **review_character 超时**：4 张 512×512 预览图 + 1 ref，payload 较大，通常超时 auto-pass
+5. **BGM 为程序合成**（v2）：numpy 生成简单环境音乐，质量有限，留 `bgm/` 自定义目录供放入真实素材
+6. **LUT 为程序生成**（v2）：numpy 生成 6 种风格 3D LUT，效果不如专业 LUT 包，留 `color.lut_dir` 自定义路径
+7. **STT 默认关闭**（v2）：TTS 时间戳通常够用，`--stt` 仅在需要重新对齐时开启（额外 GPU 显存+耗时）
+8. **视频编码统一 yuv420p**（v2 修复）：LUT 调色 + STT 烧录的 ffmpeg 命令均加 `-pix_fmt yuv420p`，确保所有播放器兼容（之前 lut3d 滤镜导致输出 yuv444p，部分播放器无法播放）

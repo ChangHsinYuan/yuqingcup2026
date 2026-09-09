@@ -26,6 +26,7 @@ from utils.splat_renderer import render_splat_at_angle, render_splat_angles
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
 from utils.rife import RIFEClient, extract_frame as rife_extract_frame, get_video_frame_count
 from utils.music import generate_bgm
+from utils.stt import transcribe_audio
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
 
@@ -49,12 +50,13 @@ class Pipeline:
         self.rife_config = self.config.get('rife', {})
         self.color_config = self.config.get('color', {})
         self.bgm_config = self.config.get('bgm', {})
+        self.stt_config = self.config.get('stt', {})
         self.max_retries = 2
 
     def run(self, concept: str, output_path: str = None,
             character_desc: str = None, voice: str = None,
             character_mode: str = 'auto', lut_override: str = None,
-            bgm_override: str = None) -> dict:
+            bgm_override: str = None, use_stt: bool = False) -> dict:
         """端到端生成有声短片
 
         character_mode:
@@ -203,10 +205,13 @@ class Pipeline:
             if bgm_path:
                 print(f'  BGM: {os.path.basename(bgm_path)}')
 
+        # 当 use_stt 时，compose 不烧字幕（留给 STT 步骤统一烧录，避免双重字幕）
+        compose_srt = None if use_stt else srt_path
+
         compose(
             clips=all_clips,
             audio_paths=all_audios,
-            srt_path=srt_path,
+            srt_path=compose_srt,
             output_path=output_path,
             transition='cut' if transition_clips else 'crossfade',
             transition_duration=0.3,
@@ -215,6 +220,18 @@ class Pipeline:
             bgm_path=bgm_path,
             bgm_volume=self.bgm_config.get('volume', 0.3),
         )
+
+        # ── 5.7 STT 字幕兜底 ──
+        if self.stt_config.get('enabled', False) or use_stt:
+            print(f'\n=== [5.7] STT 字幕对齐 ===')
+            stt_srt = self._run_stt_subtitles(output_path, task_dir)
+            if stt_srt:
+                srt_path = stt_srt
+                print(f'  STT SRT: {stt_srt}')
+            else:
+                # STT 失败：fallback 烧录 TTS 字幕
+                print(f'  ⚠ STT 失败，回退烧录 TTS 字幕: {srt_path}')
+                self._burn_subtitles(output_path, srt_path)
 
         meta['output'] = output_path
         meta['srt'] = srt_path
@@ -599,6 +616,132 @@ class Pipeline:
 
         return lut_path
 
+    def _select_bgm(self, concept: str, script: dict, task_dir: str,
+                    duration: float, override: str = None) -> str:
+        """选择或生成配乐 BGM。
+
+        Args:
+            concept: 用户概念
+            script: 编剧脚本
+            task_dir: 任务目录（BGM 输出到此）
+            duration: BGM 时长（秒）
+            override: 手动指定 mood 名（None 则 LLM 自动选择）
+
+        Returns:
+            BGM wav 文件路径，或 None
+        """
+        moods = self.bgm_config.get('moods', ['calm'])
+
+        if override:
+            mood = override
+        else:
+            try:
+                mood = self.llm.select_bgm_mood(concept, script, moods)
+            except Exception as e:
+                print(f'  ⚠ BGM mood selection failed: {e}, using default')
+                mood = self.bgm_config.get('default_mood', moods[0])
+
+        # 优先使用自定义 BGM 目录
+        custom_dir = self.bgm_config.get('custom_dir', '')
+        if custom_dir and os.path.isdir(custom_dir):
+            custom_path = os.path.join(custom_dir, f'{mood}.wav')
+            if os.path.isfile(custom_path):
+                print(f'  [custom] using {custom_path}')
+                return custom_path
+
+        # 生成 BGM
+        bgm_path = os.path.join(task_dir, 'bgm.wav')
+        try:
+            generate_bgm(mood, duration, bgm_path)
+            print(f'  [generated] {mood}, {duration:.1f}s')
+            return bgm_path
+        except Exception as e:
+            print(f'  ⚠ BGM generation failed: {e}')
+            return None
+
+    def _burn_subtitles(self, video_path: str, srt_path: str) -> bool:
+        """将 SRT 字幕烧录进视频（就地替换）。返回 True 成功。"""
+        import subprocess
+        import shutil
+
+        if not srt_path or not os.path.isfile(srt_path):
+            return False
+
+        temp = video_path.replace('.mp4', '_resub.mp4')
+        shutil.move(video_path, temp)
+        ffmpeg = shutil.which('ffmpeg') or 'ffmpeg'
+        subtitle_filter = (
+            f"subtitles='{srt_path}':force_style='FontSize=24,"
+            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+            f"BorderStyle=1,Outline=2,Alignment=2'"
+        )
+        try:
+            subprocess.run(
+                [ffmpeg, '-y', '-i', temp, '-vf', subtitle_filter,
+                 '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+                 '-pix_fmt', 'yuv420p',
+                 video_path],
+                capture_output=True, timeout=600,
+            )
+            os.remove(temp)
+            return os.path.isfile(video_path)
+        except Exception as e:
+            print(f'  ⚠ burn_subtitles failed: {e}')
+            if os.path.isfile(temp):
+                shutil.move(temp, video_path)
+            return False
+
+    def _run_stt_subtitles(self, video_path: str, task_dir: str) -> str:
+        """用 faster-whisper 对成片音频做 STT 转写，生成 STT 字幕 SRT。
+
+        Args:
+            video_path: 成片视频路径
+            task_dir: 任务目录
+
+        Returns:
+            STT SRT 文件路径，或 None
+        """
+        import subprocess
+        import shutil
+
+        # 提取成片音频
+        audio_path = os.path.join(task_dir, 'final_audio.wav')
+        try:
+            subprocess.run(
+                [shutil.which('ffmpeg') or 'ffmpeg', '-y', '-i', video_path,
+                 '-vn', '-ac', '1', '-ar', '16000', '-q:a', '2', audio_path],
+                capture_output=True, timeout=120,
+            )
+            if not os.path.isfile(audio_path):
+                print('  ⚠ STT: failed to extract audio')
+                return None
+        except Exception as e:
+            print(f'  ⚠ STT: audio extraction failed: {e}')
+            return None
+
+        # STT 转写
+        language = self.stt_config.get('language', 'zh')
+        try:
+            segments = transcribe_audio(audio_path, language=language, config=self.config)
+            print(f'  STT: {len(segments)} segments')
+            for s in segments[:3]:
+                print(f'    [{s["start"]:.2f}-{s["end"]:.2f}] {s["text"]}')
+            if len(segments) > 3:
+                print(f'    ... ({len(segments) - 3} more)')
+        except Exception as e:
+            print(f'  ⚠ STT: transcription failed: {e}')
+            return None
+
+        # 生成 SRT
+        srt_path = os.path.join(task_dir, 'subtitle_stt.srt')
+        from utils.ffmpeg_tools import generate_srt
+        generate_srt(segments, srt_path)
+
+        # 烧录 STT 字幕
+        if self._burn_subtitles(video_path, srt_path):
+            return srt_path
+        return None
+
     def _generate_transitions(self, clips: list, clips_dir: str, task_id: str) -> list:
         """生成镜头间 RIFE 过渡视频。
 
@@ -670,6 +813,13 @@ if __name__ == '__main__':
                         help='Color grading LUT style (auto-select if not specified)')
     parser.add_argument('--no-color', action='store_true',
                         help='Disable color grading')
+    parser.add_argument('--bgm', default=None,
+                        choices=['calm', 'uplifting', 'mysterious', 'dramatic', 'playful'],
+                        help='BGM mood (auto-select if not specified)')
+    parser.add_argument('--no-bgm', action='store_true',
+                        help='Disable background music')
+    parser.add_argument('--stt', action='store_true',
+                        help='Use faster-whisper STT for subtitle alignment (overrides TTS timestamps)')
     args = parser.parse_args()
 
     pipeline = Pipeline()
@@ -677,8 +827,12 @@ if __name__ == '__main__':
         pipeline.rife_config['enabled'] = False
     if args.no_color:
         pipeline.color_config['enabled'] = False
+    if args.no_bgm:
+        pipeline.bgm_config['enabled'] = False
     meta = pipeline.run(args.concept, output_path=args.output,
                         character_desc=args.character, voice=args.voice,
                         character_mode=args.character_mode,
-                        lut_override=args.lut)
+                        lut_override=args.lut,
+                        bgm_override=args.bgm,
+                        use_stt=args.stt)
     print(f'\nDone: {meta["output"]}')
