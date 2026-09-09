@@ -59,5 +59,11 @@
     "background_height": 480,
     "steps": 20,
     "guidance": 3.5
+  },
+  "rife": {
+    "enabled": true,
+    "model": "rife_v4.26.safetensors",
+    "multiplier": 8,
+    "fps": 24
   }
 }

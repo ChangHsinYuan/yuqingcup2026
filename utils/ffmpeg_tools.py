@@ -106,7 +106,8 @@ def generate_srt(timestamps: list, output_path: str, offset: float = 0.0) -> str
 def compose(clips: list, audio_paths: list, srt_path: str = None,
             output_path: str = 'output/final.mp4',
             transition: str = 'crossfade',
-            transition_duration: float = 0.3) -> str:
+            transition_duration: float = 0.3,
+            transition_clips: list = None) -> str:
     """合成最终视频：拼接画面 + 合并配音 + 烧录字幕
 
     Args:
@@ -116,11 +117,12 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
         output_path: 输出视频路径
         transition: 转场类型 ('crossfade' 或 'cut')
         transition_duration: 转场时长（秒）
+        transition_clips: 镜头间过渡视频路径列表 [trans_1.mp4, trans_2.mp4, ...]
+                         长度 = len(clips) - 1，None 则不用 RIFE 过渡
     """
     from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
     from moviepy.video.fx import CrossFadeIn, Freeze
 
-    # 加载各片段，按音频时长对齐
     video_clips = []
     all_audio_clips = []
 
@@ -128,7 +130,6 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
         vc = VideoFileClip(video_path)
         ac = AudioFileClip(audio_path)
 
-        # 以音频时长为准：画面不足则定格末帧，画面多余则截断
         if ac.duration > vc.duration:
             freeze_t = max(0, vc.duration - 0.04)
             vc = vc.with_effects([Freeze(t=freeze_t,
@@ -139,22 +140,21 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
 
         vc = vc.with_audio(ac)
 
-        if transition == 'crossfade' and i > 0:
+        if transition == 'crossfade' and i > 0 and not transition_clips:
             vc = vc.with_effects([CrossFadeIn(transition_duration)])
 
         video_clips.append(vc)
         all_audio_clips.append(ac)
 
-    if transition == 'crossfade' and len(video_clips) > 1:
-        final_video = concatenate_videoclips(
-            video_clips,
-            method='compose',
-            padding=-transition_duration,
-        )
-    else:
-        final_video = concatenate_videoclips(video_clips, method='compose')
+        # Insert RIFE transition clip between shots
+        if transition_clips and i < len(transition_clips):
+            trans_path = transition_clips[i]
+            if trans_path and os.path.isfile(trans_path):
+                tc = VideoFileClip(trans_path)
+                video_clips.append(tc)
 
-    # 先渲染无字幕版本
+    final_video = concatenate_videoclips(video_clips, method='compose')
+
     temp_output = output_path.replace('.mp4', '_nosub.mp4')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     final_video.write_videofile(
@@ -170,7 +170,6 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
     for ac in all_audio_clips:
         ac.close()
 
-    # 烧录字幕
     if srt_path and os.path.isfile(srt_path):
         subtitle_filter = f"subtitles='{srt_path}':force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2'"
         cmd = [

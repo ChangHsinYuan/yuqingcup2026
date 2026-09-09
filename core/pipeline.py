@@ -23,6 +23,7 @@ from utils.tts import TTSClient
 from utils.comfy_api import ComfyClient
 from utils.splat_renderer import render_splat_at_angle, render_splat_angles
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
+from utils.rife import RIFEClient, extract_frame as rife_extract_frame, get_video_frame_count
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
 
@@ -43,6 +44,7 @@ class Pipeline:
         self.wan_defaults = self.config.get('wan_defaults', {})
         self.i2v_defaults = self.config.get('i2v_defaults', {})
         self.flux_defaults = self.config.get('flux_defaults', {})
+        self.rife_config = self.config.get('rife', {})
         self.max_retries = 2
 
     def run(self, concept: str, output_path: str = None,
@@ -153,6 +155,12 @@ class Pipeline:
                     'duration': ts['duration'],
                 })
             audio_offset += clip_info['audio']['duration']
+
+        # ── 4.5 RIFE 镜头间过渡 ──
+        transition_clips = []
+        if self.rife_config.get('enabled', False) and len(all_clips) >= 2:
+            print(f'\n=== [4.5] RIFE 镜头间过渡 ===')
+            transition_clips = self._generate_transitions(all_clips, clips_dir, task_id)
 
         # ── 5. 合成 ──
         print('\n=== [5] 合成 ===')

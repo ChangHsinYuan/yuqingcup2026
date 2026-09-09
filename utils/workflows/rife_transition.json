@@ -1,51 +1,9 @@
 {
-  "1": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "{{frame_a_name}}"
-    }
-  },
-  "2": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "{{frame_b_name}}"
-    }
-  },
-  "3": {
-    "class_type": "ImageBatch",
-    "inputs": {
-      "image1": ["1", 0],
-      "image2": ["2", 0]
-    }
-  },
-  "4": {
-    "class_type": "FrameInterpolationModelLoader",
-    "inputs": {
-      "model_name": "{{model_name}}"
-    }
-  },
-  "5": {
-    "class_type": "FrameInterpolate",
-    "inputs": {
-      "interp_model": ["4", 0],
-      "images": ["3", 0],
-      "multiplier": {{multiplier}}
-    }
-  },
-  "6": {
-    "class_type": "CreateVideo",
-    "inputs": {
-      "images": ["5", 0],
-      "fps": {{fps}}
-    }
-  },
-  "7": {
-    "class_type": "SaveVideo",
-    "inputs": {
-      "video": ["6", 0],
-      "filename_prefix": "{{filename_prefix}}",
-      "format": "mp4",
-      "codec": "auto"
-    }
-  }
+  "1": {"class_type": "LoadImage", "inputs": {"image": {{frame_a_name}}}},
+  "2": {"class_type": "LoadImage", "inputs": {"image": {{frame_b_name}}}},
+  "3": {"class_type": "ImageBatch", "inputs": {"image1": ["1", 0], "image2": ["2", 0]}},
+  "4": {"class_type": "FrameInterpolationModelLoader", "inputs": {"model_name": {{model_name}}}},
+  "5": {"class_type": "FrameInterpolate", "inputs": {"interp_model": ["4", 0], "images": ["3", 0], "multiplier": {{multiplier}}}},
+  "6": {"class_type": "CreateVideo", "inputs": {"images": ["5", 0], "fps": {{fps}}}},
+  "7": {"class_type": "SaveVideo", "inputs": {"video": ["6", 0], "filename_prefix": {{filename_prefix}}, "format": "mp4", "codec": "auto"}}
 }
