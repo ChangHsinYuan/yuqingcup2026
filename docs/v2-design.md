@@ -2,9 +2,11 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1 角色一致性见 [v1-design.md](./v1-design.md)
 >
-> **状态：✅ 已完成**（2026-09-09 端到端验证通过，M1-M5 全部完成）
+> **状态：✅ 核心完成**（2026-09-09 M1-M5 端到端验证通过）
 >
-> **验证结果**：3 镜+2 RIFE 过渡=14.9s 成片，并行预取 + cinematic LUT 调色 + uplifting BGM ducking + STT 字幕对齐，全部端到端通过。
+> **验证结果**：3 次端到端验证（10-20s 成片，3-4 镜），RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕全链路通过。编码 yuv420p + High profile 兼容性修复。
+>
+> **未实现项（→ v2.1 backlog）**：单镜慢动作、per-shot 过渡类型、后期审片 4 维、music subagent、`--duration` CLI、长片验证（5-15 镜/60s+）。详见 §12.2。
 
 ## 1. 概述
 
@@ -184,6 +186,8 @@ ImageBatch(末帧, 首帧) → FrameInterpolate(model, images, multiplier=8)
 
 ### 3.2 单镜慢动作
 
+> **⚠️ backlog：未接入 pipeline**。`RIFEClient.slowmo()` 方法已实现（`rife.py:91`），但 pipeline 从未调用，LLM prompt 也不生成 `shot.slowmo` 字段。
+
 某些镜头（如"角色缓缓回头"）用 RIFE 帧倍增做慢动作：
 
 ```
@@ -277,12 +281,12 @@ MiniMax-H3（8188）支持 joint AV latent（视频+音频同时生成），节�
       "background_prompt": "...",
       "camera": { "yaw": 35, "pitch": 10, "fov": 50 },
       "duration": 5,
-      "slowmo": {                           // v2 新增：慢动作
+      "slowmo": {                           // v2 新增：慢动作（⚠️ backlog，未接入 pipeline）
         "multiplier": 2,
         "mode": "slowmo"
       },
-      "transition_out": "rife",             // v2 新增：过渡类型 rife|crossfade|cut
-      "transition_frames": 8,               // v2 新增：过渡帧数
+      "transition_out": "rife",             // v2 新增：过渡类型（⚠️ backlog，pipeline 当前对所有镜头统一 RIFE）
+      "transition_frames": 8,               // v2 新增：过渡帧数（⚠️ backlog）
       "params": { /* 复用 v1 */ }
     }
   ]
@@ -409,6 +413,8 @@ RIFE / 调色 / 配乐（后期阶段）：
 
 ### 8.1 后期审片维度
 
+> **⚠️ backlog：未实现**。pipeline 无后期整片审片环节，逐镜审片复用 v1 四维（consistency/quality/motion/artifact）。
+
 逐镜审片复用 v1（五维含 character_consistency）。v2 新增后期整体审片：
 
 | 维度 | 标准 |
@@ -419,6 +425,8 @@ RIFE / 调色 / 配乐（后期阶段）：
 | audio_balance | 旁白清晰、BGM 不喧宾夺主 |
 
 ### 8.2 music subagent（新增）
+
+> **⚠️ backlog：简化为 pipeline 内联 LLM 调用**。`.opencode/agents/music.md` 和 `.opencode/skills/music_selection/` 未创建。BGM 选择由 `pipeline._select_bgm()` → `llm.select_bgm_mood()` 直接完成，功能等价但非独立 subagent 架构。
 
 ```
 director → task → music subagent
@@ -455,16 +463,18 @@ director → task → music subagent
 
 ### 9.4 代码新增
 
-| 文件 | 改动 |
-|------|------|
-| `core/pipeline.py` | 镜头并行 + 后期链路（RIFE/调色/配乐/STT） |
-| `utils/rife.py` | RIFE 插帧客户端（调 ComfyUI） |
-| `utils/color.py` | ffmpeg 调色封装 |
-| `utils/audio_mix.py` | 配乐 ducking 混音 |
-| `utils/stt.py` | faster-whisper STT → SRT |
-| `utils/workflows/rife_*.json` | 新 workflow 模板 |
-| `.opencode/agents/music.md` | music subagent 定义 |
-| `.opencode/skills/music_selection/SKILL.md` | 配乐选择规范 |
+> **实现说明**：`color.py` 和 `audio_mix.py` 未单独建文件，调色/混音逻辑折叠进 `ffmpeg_tools.py` + `pipeline.py`。`rife_slowmo.json` 未建（slowmo 复用 `rife_transition.json`，但 slowmo 整体未接入 pipeline）。`music.md` 和 `music_selection/` 未建（简化为内联 LLM 调用）。
+
+| 文件 | 改动 | 状态 |
+|------|------|------|
+| `core/pipeline.py` | 镜头并行 + 后期链路（RIFE/调色/配乐/STT） | ✅ |
+| `utils/rife.py` | RIFE 插帧客户端（调 ComfyUI） | ✅ |
+| `utils/color.py` | ffmpeg 调色封装 | ❌ 折叠进 ffmpeg_tools |
+| `utils/audio_mix.py` | 配乐 ducking 混音 | ❌ 折叠进 ffmpeg_tools |
+| `utils/stt.py` | faster-whisper STT → SRT | ✅ |
+| `utils/workflows/rife_*.json` | 新 workflow 模板 | ⚠️ 仅 rife_transition.json，rife_slowmo.json 未建 |
+| `.opencode/agents/music.md` | music subagent 定义 | ❌ 简化为内联 LLM |
+| `.opencode/skills/music_selection/SKILL.md` | 配乐选择规范 | ❌ 未建 |
 
 ---
 
@@ -472,14 +482,14 @@ director → task → music subagent
 
 v2 跑通的标志：
 
-1. **长片**：成片 1-3 分钟，5-15 镜，角色跨镜头一致（继承 v1）
-2. **软过渡**：镜头间 RIFE 光流插帧，无硬跳变（大跨场景降级 crossfade）
-3. **调色统一**：全片套同一 LUT，色调一致
-4. **配乐**：BGM 匹配情绪，旁白段 ducking 自动降音
-5. **字幕**：TTS 时间戳为主，漂移时 faster-whisper 兜底
-6. **并行加速**：镜头级并行，总生成时间显著低于串行
-7. **后期审片**：色调/配乐/过渡/混音四维通过
-8. **MiniMax-H3 评估报告**：原生音频 vs 后期 TTS 对比结论
+1. **长片**：成片 1-3 分钟，5-15 镜，角色跨镜头一致（继承 v1） — ⚠️ 未验证（3 次测试均为 3-4 镜/10-20s，LLM prompt 硬编码 "2-5个镜头"）
+2. **软过渡**：镜头间 RIFE 光流插帧，无硬跳变（大跨场景降级 crossfade） — ✅ RIFE 过渡通过，⚠️ 大跨场景降级未实现（pipeline 对所有镜头统一 RIFE）
+3. **调色统一**：全片套同一 LUT，色调一致 — ✅
+4. **配乐**：BGM 匹配情绪，旁白段 ducking 自动降音 — ✅
+5. **字幕**：TTS 时间戳为主，漂移时 faster-whisper 兜底 — ✅
+6. **并行加速**：镜头级并行，总生成时间显著低于串行 — ✅ 实现并行预取，⚠️ 未量化加速比
+7. **后期审片**：色调/配乐/过渡/混音四维通过 — ❌ 未实现后期审片
+8. **MiniMax-H3 评估报告**：原生音频 vs 后期 TTS 对比结论 — ❌ 未做（M6 待定）
 
 验收命令（设计）：
 ```bash
@@ -512,7 +522,7 @@ python core/pipeline.py "一个穿红斗篷的少年穿越雪原寻找故乡" --
 | M4 | 配乐 ducking 混音 + BGM 库 + music subagent | 完整音频链路 | ✅ |
 | M5 | faster-whisper STT 兜底 | 字幕备选 | ✅ |
 | M6 | MiniMax-H3 原生音频对比评估 | 评估报告 | 🔲 待定 |
-| M7 | 后期审片维度 + 端到端联调 | 闭环 | ✅ |
+| M7 | 端到端联调（后期审片维度 → backlog） | 闭环 | ✅ 联调 / ❌ 审片 |
 | M8 | 长片端到端验证（90s+） | v2 成片 | ✅ |
 
 > 依赖 v1 完成。建议 v1 验收通过后再启动 v2。
@@ -555,3 +565,15 @@ python core/pipeline.py "一个穿红斗篷的少年穿越雪原寻找故乡" --
 - CLI：`--stt`（默认关闭，TTS 时间戳通常够用）
 
 **v2 验证输出**：`/mnt/dataset/zxy/vidance/output/20260909_152833/`（3 镜 14.9s，RIFE 过渡+cinematic LUT+uplifting BGM+STT 字幕）
+
+### 12.2 未实现项（→ v2.1 backlog）
+
+| 项目 | 设计章节 | 说明 | 技术难度 |
+|------|---------|------|---------|
+| 单镜慢动作 | §3.2, §4.1 | `rife.py:91` `slowmo()` 已写好，pipeline 未接线，LLM prompt 不生成 `shot.slowmo` 字段 | 无（接线 3 行 + prompt 加字段） |
+| per-shot 过渡类型 | §4.1 | pipeline 对所有镜头统一 RIFE，不读 `transition_out` 字段，大跨场景无法降级 crossfade | 无（if/else 分流） |
+| 后期审片 4 维 | §8.1 | 无整片审片环节，代码不复杂但多模态 API 不稳定大概率 auto-pass | 低（代码）/ 中（API 瓶颈） |
+| music subagent | §8.2 | 未建 `.opencode/agents/music.md`，简化为 pipeline 内联 LLM 调用 | 无（功能等价） |
+| `--duration` CLI | §10 | 未加 argparse 参数 | 无 |
+| 长片验证 | §10 标准 1 | LLM prompt 硬编码 "2-5个镜头"（`llm.py:116`），3 次测试均为 3-4 镜/10-20s | 无（改 prompt 一行） |
+| MiniMax-H3 评估 | §3.6, M6 | 未做对比评估 | — |

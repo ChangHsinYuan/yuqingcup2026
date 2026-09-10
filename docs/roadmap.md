@@ -145,11 +145,19 @@
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 
-### v2 — 长视频（✅ 已完成）
+### v2 — 长视频（✅ 核心完成，v2.1 backlog）
 
 **目标**：超出单次生成上限的长片 + 完整后期。**建立在 v1 角色一致性之上**（长片仍需跨镜头角色不漂移）。
 
-**状态**：2026-09-09 全部完成。M1-M5 端到端验证通过（3 镜+2 过渡=14.9s 成片，RIFE 过渡+并行预取+cinematic 调色+uplifting 配乐 ducking+STT 字幕）。
+**状态**：2026-09-09 M1-M5 核心完成，端到端验证通过（3 次测试，10-20s 成片/3-4 镜）。RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕全链路跑通。编码 yuv420p + 字幕重叠 bug 已修复。
+
+**未验证/未实现（→ v2.1 backlog）**：
+- 长片验证（5-15 镜/60s+）：LLM prompt 硬编码 "2-5个镜头"（`llm.py:116`），未跑过长片
+- 单镜慢动作：`rife.py:91` `slowmo()` 已写好但 pipeline 未接线
+- per-shot 过渡类型：pipeline 对所有镜头统一 RIFE，不读 `transition_out` 字段
+- 后期审片 4 维（color/bgm/transition/audio）：未实现
+- music subagent：简化为 pipeline 内联 LLM 调用（功能等价）
+- MiniMax-H3 评估（M6）：未做
 
 - **M1 RIFE 光流插帧** ✅：镜头间光流过渡（rife_v4.26，multiplier=8，0.375s@24fps），替代 crossfade 硬拼接。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成
 - **M2 镜头并行预取** ✅：ThreadPoolExecutor 并行预取所有镜头的 FLUX 参考帧（GPU0）+ TTS 配音（9880），与 Wan I2V（GPU2）串行执行不冲突，总耗时显著缩短
@@ -161,7 +169,7 @@
 
 **CLI 新增参数**：`--no-rife` / `--lut <style>` / `--no-color` / `--bgm <mood>` / `--no-bgm` / `--stt`
 
-**详细设计**：见 [v2-design.md](./v2-design.md)（📐 设计完成）
+**详细设计**：见 [v2-design.md](./v2-design.md)（✅ 核心完成，v2.1 backlog 见 §12.2）
 
 ### v3 — 2D→3D→新视角（📐 设计完成，⚠️ 有阻塞）
 

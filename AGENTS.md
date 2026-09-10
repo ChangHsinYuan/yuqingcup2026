@@ -171,7 +171,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
 | claude-sonnet-4-6 | 审片备选（review_strict，534s/镜太慢） |
 
-## 已知限制（v1.1）
+## 已知限制（v2）
 
 1. **3DGS 角色重建质量仍是瓶颈**（character_consistency 2-4/10）：
    - TripoSplat 262K 高斯渲染稀疏，像素覆盖 31-35%（v1.1 位姿修复后提升，原 13-26%）
@@ -191,3 +191,9 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 6. **LUT 为程序生成**（v2）：numpy 生成 6 种风格 3D LUT，效果不如专业 LUT 包，留 `color.lut_dir` 自定义路径
 7. **STT 默认关闭**（v2）：TTS 时间戳通常够用，`--stt` 仅在需要重新对齐时开启（额外 GPU 显存+耗时）
 8. **视频编码统一 yuv420p**（v2 修复）：LUT 调色 + STT 烧录的 ffmpeg 命令均加 `-pix_fmt yuv420p`，确保所有播放器兼容（之前 lut3d 滤镜导致输出 yuv444p，部分播放器无法播放）
+9. **长片未验证**（v2 backlog）：LLM 编剧 prompt 硬编码 "2-5个镜头"（`llm.py:116`），3 次测试均为 3-4 镜/10-20s，未跑过 5-15 镜长片
+10. **单镜慢动作未接入**（v2 backlog）：`rife.py:91` `slowmo()` 方法已实现，但 pipeline 从未调用，LLM prompt 也不生成 `shot.slowmo` 字段
+11. **per-shot 过渡类型未实现**（v2 backlog）：pipeline 对所有相邻镜头统一 RIFE，不读 `transition_out` 字段，大跨场景无法降级 crossfade
+12. **后期审片 4 维未实现**（v2 backlog）：设计 §8.1 定义 color_consistency/bgm_fit/transition_smooth/audio_balance，pipeline 无整片审片环节（逐镜审片复用 v1 四维）
+13. **music subagent 简化**（v2 偏差）：设计 §8.2 定义独立 music subagent，实际简化为 pipeline 内联 LLM 调用（`llm.select_bgm_mood()`），功能等价
+14. **无 `--duration` CLI**（v2 backlog）：设计 §10 验收命令含 `--duration 90`，实际未加 argparse 参数
