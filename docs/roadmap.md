@@ -199,6 +199,28 @@
 
 **详细设计**：见 [v2-design.md](./v2-design.md)（✅ 核心完成，v2.1 backlog 见 §12.2）
 
+### v2.5 — 多入口架构与 H3 引擎接入（✅ 已完成）
+
+**目标**：不是加功能，而是重构入口和引擎层——统一 CLI 多子命令 + H3 ref2va 新引擎 + 后处理模块化。
+
+**状态**：2026-09-11 端到端验证通过（13 个分镜脚本 / 32 镜 / ~96s 成片，双角色跨镜一致）。
+
+```
+统一入口 vidance.py
+  ├─ auto   → pipeline.py → LLM编剧 → FLUX/Wan → TTS → 审片 → PostProcessor → 成片
+  ├─ custom → custom_gen.py → 脚本解析 → H3 ref2va(多角色参考图+原生音频) → PostProcessor → 成片
+  └─ quick  → pipeline.py → LLM编剧 → Wan T2V → TTS → 成片（无后处理）
+```
+
+- **统一 CLI**：`vidance.py` 三子命令（auto/custom/quick），argparse parent parser 共享后处理参数
+- **H3 ref2va**：参考图每步去噪注入锁定角色身份，1344×768 + 原生音频，`<Picture i>` 标签引用多角色
+- **PostProcessor**：从 Pipeline 抽出 RIFE/LUT/BGM/STT 为独立类，auto 和 custom 共享
+- **多角色**：custom 模式支持最多 10 张参考图，双角色（豆包+奶蛙）跨 32 镜验证通过
+- **中文 prompt 直传**：Qwen3-VL-32B 原生中文，省翻译步骤
+- 向后兼容旧入口（pipeline.py / custom_gen.py 仍可直跑）
+
+**详细设计**：见 [v2.5-design.md](./v2.5-design.md)
+
 ### v3 — 2D→3D→新视角（📐 设计完成，⚠️ 有阻塞）
 
 **目标**：从 2D 内容重建 3D，生成原视角没有的新角度视频。
@@ -318,6 +340,8 @@ vidance/
 │   ├── v0-design.md           # v0 详细设计（✅ 已完成）
 │   ├── v1-design.md           # v1 角色一致性设计（✅ 已完成）
 │   ├── v2-design.md           # v2 长视频+完整后期设计（✅ 已完成）
+│   ├── v2.5-design.md         # v2.5 多入口架构+H3引擎接入（✅ 已完成）
+│   ├── deployed-models.md     # 已部署模型清单
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（📐 设计完成，⚠️ 阻塞）
 │   ├── v4-design.md           # v4 营销号流水线设计（📐 设计完成）
 │   ├── hierachy.md
