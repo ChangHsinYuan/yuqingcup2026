@@ -47,46 +47,74 @@
 
 ## 3. 模型与引擎清单
 
-### 3.1 已部署且运行中
+### 3.1 视频生成模型（ComfyUI 实例）
 
-| 模型 | 能力 | GPU | ComfyUI 端口 | API 端口 | 显存占用 | 模型文件 | 用途版本 |
-|------|------|-----|-------------|---------|---------|---------|---------|
-| **Wan2.2-TI2V-5B** | T2V + I2V（文/图生视频） | GPU2 | 8189 | 8890 | 17.8G | 17G（unet 9.4G + umt5 6.3G + vae 1.4G） | v0 主力 / v1 I2V 复用 |
-| **HunyuanVideo 13B** | T2V | GPU3 | 8190 | 8891 | 20.1G | 34G（unet 24G bf16 + llava 8.5G + clip_l 235M + vae 471M） | v0 备选/v1+ |
-| **SDXL Base 1.0** | T2I（文生图） | GPU1 | 8191 | 8892 | 31.5G | 8.7G（单文件 6.5G） | v1 备选角色/场景图（FLUX 为主力） |
-| **FLUX.1-dev fp8** | T2I（文生图，高质量） | GPU0 | 8192 | 8893 | 36.2G | 16G（unet 12G + t5 4.6G + vae 320M） | v1 角色生成主力 |
-| **TripoSplat** | 单图→3DGS 高斯 | GPU0 | 8192（共用FLUX） | — | ~4G（运行时） | 3.6G（5文件：triposplat_fp16 + dino_v3 + triposplat_vae_decoder + flux2-vae + birefnet） | v1 角色锚核心 |
+| 模型 | 能力 | GPU | 端口 | 显存 | 模型文件 | 大小 | 状态 |
+|------|------|-----|------|------|---------|------|------|
+| **Wan2.2-TI2V-5B** | T2V + I2V | GPU2 | 8189 | 18G | `wan2.2_ti2v_5B_fp16`(9.4G) + `umt5_xxl_fp8`(6.3G) + `wan2.2_vae`(1.4G) | 17G | 运行中 |
+| **MiniMax-H3 ref2va** | 参考图→视频+原生音频 | GPU0 | 8188 | 46G | `minimax_h3_ref2va_int8`(20G) + `qwen3vl_32b_int8`(26G) + `video_vae_fp16`(4.9G) + `audio_vae_fp32`(578M) | 70G | **运行中（custom 主力）** |
+| **HunyuanVideo 13B** | T2V | GPU3 | 8190 | 20G | `hunyuan_video_t2v_720p_bf16`(24G) + `llava_llama3_fp8`(8.5G) + `clip_l`(235M) + `vae`(471M) | 34G | 运行中 |
+| **SDXL Base 1.0** | T2I | GPU1 | 8191 | 7G | `sd_xl_base_1.0.safetensors`(6.5G) | 6.5G | 运行中 |
+| **FLUX.1-dev fp8** | T2I | GPU0 | 8192 | — | `flux1-dev-fp8`(12G) + `t5xxl_fp8`(4.6G) + `ae`(320M) | 16G | **已停** |
+| **TripoSplat** | 单图→3DGS | GPU0 | 8192 | ~4G | `triposplat_fp16`(707M) + `dino_v3_vit_h`(1.6G) + `vae_decoder`(550M) + `flux2-vae`(321M) + `birefnet`(424M) | 3.6G | 随 FLUX |
+| **MiniMax-H3 fl2va** | 纯文本→视频 | GPU0 | 8188 | — | `minimax_h3_fl2va_pruned_int8`(20G) | 20G | 备用（同实例） |
 
-- 中文 prompt：SDXL/FLUX 均经 `translate.py`（USTC deepseek-v4-flash）自动中→英翻译
-- HunyuanVideo 中文 tokenizer bug 已修复（`LlamaTokenizerFast` → `PreTrainedTokenizerFast`）
-- 所有 CLI/server 默认随机 seed + `--seed N` 复现，防 ComfyUI 缓存命中
+- Wan T2V/I2V：auto/quick 模式主力，1280×704@24fps
+- H3 ref2va：custom 模式主力，1344×768@24fps + 原生音频，Qwen3-VL-32B 文本编码器原生支持中文
+- H3 prompt 用 `<Picture i>` 标签引用参考图，ref_image_size: match(快)/max(2048px 高保真)
+- HunyuanVideo/SDXL：备选引擎，目前未接入流水线
+- FLUX 已停（8192 端口无进程），TripoSplat 随 FLUX 共实例；auto 模式 flux 角色锚需重新启动 8192
+- 每镜随机 seed（防 ComfyUI 缓存命中）
 
-### 3.2 已部署但未运行（随时可拉起）
+### 3.2 音频模型
 
-| 模型 | 能力 | 端口 | 模型文件 | 说明 |
-|------|------|------|---------|------|
-| **MiniMax-H3** | T2V + 音画同步 | 8188/8889 | 70G | 生成较慢，v0 不用；音画同步能力待 v2 评估 |
+| 模型 | 能力 | 端口 | GPU | 显存 | 大小 | 状态 |
+|------|------|------|------|------|------|------|
+| **CosyVoice 2 (0.5B)** | TTS + zero-shot 音色克隆 | 9880 | GPU2 | 2.5G | 4.4G（llm.pt 1.9G + flow.pt 430M + hift.pt 80M + tokenizer 474M×2） | 运行中 |
+| **faster-whisper large-v3-turbo** | STT 语音转文字 | 内嵌 | 共享 | 1.5G | 1.6G（int8_float16 model.bin） | 按需（`--stt`） |
+| **edge-tts** | 在线 TTS（微软神经语音） | 9880 | CPU | 0 | 0（在线） | 运行中 |
 
-### 3.3 已部署完成（v0 基础设施）
+- TTS 双引擎统一封装（`utils/tts_server.py`）：edge-* 走 edge-tts，cosy-* 走 CosyVoice
+- STT 模型在 hf_cache，`--stt` 时 faster-whisper 内嵌加载（不需独立服务）
+- custom 模式用 H3 原生音频，不使用 TTS
 
-| 组件 | 能力 | 部署方式 | 资源 | 状态 |
-|------|------|---------|------|------|
-| **ffmpeg 8.0.1 + sox 14.4.2** | 视频后处理 / CosyVoice 音频依赖 | conda install（cosyvoice env），软链 `~/.local/bin/` | — | ✅ |
-| **moviepy 2.1.2** | Python 视频编辑（字幕/特效/转场高级封装） | pip install（主环境），Pillow 降到 11.3.0 | — | ✅ |
-| **edge-tts 7.2.8** | 微软神经语音（在线 TTS，自然音色） | pip install（cosyvoice env） | CPU, 0 显存 | ✅ |
-| **CosyVoice 2** | TTS 文字转语音 + zero-shot 音色克隆 | conda env(python3.10) + modelscope 下模型 | GPU2:9880, ~2.5G 显存 | ✅ |
-| **MoneyPrinterTurbo** | 自动成片 pipeline（仅克隆研究架构） | git clone，不部署 | — | ✅ 已克隆 |
+### 3.3 插帧模型
 
-> TTS 服务为双引擎统一封装（`utils/tts_server.py`）：edge-tts 走 `edge-*` 音色前缀，CosyVoice 走 `cosy-*` 前缀，对外接口一致。
+| 模型 | 能力 | 位置 | GPU | 大小 | 状态 |
+|------|------|------|------|------|------|
+| **RIFE v4.26** | 光流插帧（镜头间过渡） | ComfyUI `models/frame_interpolation/` | GPU2 | 11M | 运行中 |
+| **RIFE v4.26 heavy** | 光流插帧（高质量变体） | 同上 | GPU2 | 11M | 备用 |
 
-### 3.4 待部署（后续版本按需）
+### 3.4 程序生成资产（非模型）
 
-| 组件 | 能力 | 需要版本 | 模型来源 | 说明 |
-|------|------|---------|---------|------|
-| **RIFE / FILM** | 光流插帧（软过渡/慢动作） | v2 | hf-mirror | ComfyUI FrameInterpolate 节点 |
-| **faster-whisper** | STT 语音转文字 | v2+ | hf-mirror large-v3-turbo | 字幕时间轴备选方案（CosyVoice 时间戳不够用时） |
-| **Hunyuan3Dv2** | 图→mesh 重建 | v3 | hf-mirror | 高质量资产导出，headless 渲染需 Isaac Sim/Blender |
-| **爬虫库** | bs4/lxml/yt-dlp/feedparser | v4 | pip | 爬热点/参考图/人声 |
+| 资产 | 位置 | 大小 | 说明 |
+|------|------|------|------|
+| 3D LUT ×6 | `utils/luts/` | 948K×6 | cinematic/warm/cool/vintage/vivid/soft（`gen_luts.py` 生成） |
+| BGM | 运行时生成 | 0 | numpy 合成 5 种 mood（`music.py`），留 `bgm/` 自定义目录 |
+
+### 3.5 已下载未使用
+
+| 模型 | 位置 | 大小 | 说明 |
+|------|------|------|------|
+| Qwen3.6-35B-A3B | `/mnt/dataset/zxy/Qwen3.6-35B-A3B/` | 67G | 未接入 |
+| MiniMax-H3 原始权重 | `/mnt/dataset/zxy/MiniMax-H3/` | 465G | 已转 int8 ComfyUI 格式（70G），原始可删 |
+
+### 3.6 LLM（远程 API，不本地部署）
+
+| 模型 | 用途 |
+|------|------|
+| deepseek-v4-flash | 编剧、prompt 优化、LUT 风格选择、BGM mood 选择 |
+| claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
+| claude-sonnet-4-6 | 严格审片备选（534s/镜太慢） |
+
+> USTC API：`https://api.llm.ustc.edu.cn/v1`，key 存 `config/config.json`
+
+### 3.7 待部署（后续版本按需）
+
+| 组件 | 能力 | 需要版本 | 说明 |
+|------|------|---------|------|
+| **Hunyuan3Dv2** | 图→mesh 重建 | v3 | 高质量资产导出，headless 渲染需 Isaac Sim/Blender |
+| **爬虫库** | bs4/lxml/yt-dlp/feedparser | v4 | 爬热点/参考图/人声 |
 
 ---
 
@@ -157,7 +185,7 @@
 - per-shot 过渡类型：pipeline 对所有镜头统一 RIFE，不读 `transition_out` 字段
 - 后期审片 4 维（color/bgm/transition/audio）：未实现
 - music subagent：简化为 pipeline 内联 LLM 调用（功能等价）
-- MiniMax-H3 评估（M6）：未做
+- MiniMax-H3 评估（M6）：✅ 已完成，H3 ref2va 接入 custom 模式，13 个分镜脚本测试通过
 
 - **M1 RIFE 光流插帧** ✅：镜头间光流过渡（rife_v4.26，multiplier=8，0.375s@24fps），替代 crossfade 硬拼接。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成
 - **M2 镜头并行预取** ✅：ThreadPoolExecutor 并行预取所有镜头的 FLUX 参考帧（GPU0）+ TTS 配音（9880），与 Wan I2V（GPU2）串行执行不冲突，总耗时显著缩短
@@ -167,7 +195,7 @@
 
 **新增依赖**：RIFE 模型 ✅、faster-whisper ✅、scipy（BGM 合成）、无外部下载（LUT+BGM 均程序生成）
 
-**CLI 新增参数**：`--no-rife` / `--lut <style>` / `--no-color` / `--bgm <mood>` / `--no-bgm` / `--stt`
+**CLI 新增参数**：`--no-rife` / `--lut <style>` / `--no-color` / `--bgm <mood>` / `--no-bgm` / `--stt`（现通过统一入口 `python core/vidance.py auto/custom/quick` 使用，详见 [usage.md](./usage.md)）
 
 **详细设计**：见 [v2-design.md](./v2-design.md)（✅ 核心完成，v2.1 backlog 见 §12.2）
 
@@ -204,17 +232,18 @@
 
 ## 5. GPU 与端口分配
 
-| GPU | 显存 | 实例 | 端口 | API |
-|-----|------|------|------|-----|
-| GPU0 | 48G | FLUX.1-dev fp8 | 8192 | 8893 |
-| GPU1 | 48G | SDXL Base 1.0 | 8191 | 8892 |
-| GPU2 | 48G | Wan2.2-5B **+ CosyVoice 2** | 8189 / — | 8890 / 9880 |
-| GPU3 | 48G | HunyuanVideo 13B | 8190 | 8891 |
+| GPU | 显存 | 实例 | 端口 | 状态 |
+|-----|------|------|------|------|
+| GPU0 | 48G | MiniMax-H3 ref2va | 8188 | 运行中（custom 主力） |
+| GPU1 | 48G | SDXL Base 1.0 | 8191 | 运行中（+ Isaac Sim + aluupy 训练） |
+| GPU2 | 48G | Wan2.2-5B + CosyVoice 2 + RIFE | 8189 / 9880 | 运行中（+ aluupy 训练） |
+| GPU3 | 48G | HunyuanVideo 13B | 8190 | 运行中（+ aluupy 训练） |
 
-- CosyVoice 放 GPU2（与 Wan 共享，流水线串行不抢资源，余 23G 够 TTS ~2.5G）
+- **FLUX.1-dev fp8 (8192) 已停**：auto 模式 `--character-mode flux` 需先重启 8192（TripoSplat 随 FLUX 共实例）
+- CosyVoice 放 GPU2（与 Wan 共享，流水线串行不抢资源）
 - edge-tts 在线引擎不占 GPU（CPU + 网络）
-- MiniMax-H3（8188/8889）按需拉起，v0 不常驻
-- TripoSplat 与 FLUX 共用 GPU0:8192 同一 ComfyUI 实例（串行调用，已验证）
+- faster-whisper STT 按需加载，共享 GPU 显存（不独立常驻）
+- aluupy 在 GPU1/2/3 有训练任务，不能动
 
 ---
 
@@ -222,14 +251,11 @@
 
 | 服务 | 用途 | 状态 |
 |------|------|------|
-| USTC deepseek-v4-flash | 编剧、prompt 优化、翻译 | ✅ 免费 |
+| USTC deepseek-v4-flash | 编剧、prompt 优化、LUT 风格选择、BGM mood 选择 | ✅ 免费 |
 | USTC claude-haiku-4-5 | 多模态审片（主力，4s/镜） | ✅ 免费 |
-| USTC claude-sonnet-4-6 | 严格审片备选（review_strict，534s/镜） | ✅ 免费 |
-| USTC qwen3.6-chat / qwen3.5 | 文本备选 | ✅ 免费 |
-| USTC claude-opus-4-8 / glm-5.2 / k3 | — | ❌ 不可用 |
-| ark/doubao | — | ❌ 订阅失效 |
+| USTC claude-sonnet-4-6 | 严格审片备选（review_strict，534s/镜太慢） | ✅ 免费 |
 
-- USTC API：`https://api.llm.ustc.edu.cn/v1`，key 存 `config/config.json`（不入 git）
+> USTC API：`https://api.llm.ustc.edu.cn/v1`，key 存 `config/config.json`（不入 git）
 
 ---
 
@@ -265,27 +291,38 @@ vidance/
 │   └── skills/                # scriptwriting.md / review.md
 ├── config/
 │   └── config.json            # API key、引擎地址、模型名、音色配置
-├── core/                      # 编排层（硬编码骨架）
-│   └── pipeline.py
+├── core/                      # 编排层
+│   ├── vidance.py             # 统一 CLI 入口（auto/custom/quick 子命令）
+│   ├── pipeline.py            # auto 模式流水线主控（内部模块）
+│   ├── custom_gen.py          # custom 模式 H3 ref2va 生成（内部模块）
+│   └── postprocess.py         # 共享后处理（RIFE/LUT/BGM/STT）
 ├── utils/                     # 工具层
-│   ├── comfy_api.py           # ComfyUI 客户端
+│   ├── comfy_api.py           # ComfyUI 客户端（T2V/I2V/TripoSplat/FLUX/H3 ref2va）
 │   ├── llm.py                 # USTC LLM（文本+多模态）
 │   ├── tts.py                 # TTS 客户端（双引擎：edge-tts + CosyVoice）
 │   ├── tts_server.py          # TTS FastAPI 服务（双引擎，GPU2:9880）
+│   ├── splat_renderer.py      # 3DGS PLY 多角度渲染器
 │   ├── ffmpeg_tools.py        # 后处理（抽帧/拼接/字幕/配音合成）
+│   ├── rife.py                # RIFE 插帧客户端（镜头间过渡 + slowmo）
+│   ├── gen_luts.py            # 生成 3D LUT .cube 文件（6 种风格）
+│   ├── music.py               # 生成环境配乐 BGM（5 种风格）
+│   ├── stt.py                 # faster-whisper STT 转写
+│   ├── luts/                  # LUT 文件目录
 │   └── workflows/             # ComfyUI workflow JSON 模板
 ├── voices/                    # 自定义 CosyVoice 克隆音色素材
+├── bgm/                       # 自定义 BGM 素材目录
+├── input/                     # 输入资源（参考图 + 分镜脚本）
 ├── docs/
 │   ├── roadmap.md             # 本文档
+│   ├── usage.md               # 使用指南
 │   ├── v0-design.md           # v0 详细设计（✅ 已完成）
-│   ├── v1-design.md           # v1 角色一致性设计（📐 设计完成）
+│   ├── v1-design.md           # v1 角色一致性设计（✅ 已完成）
 │   ├── v2-design.md           # v2 长视频+完整后期设计（✅ 已完成）
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（📐 设计完成，⚠️ 阻塞）
 │   ├── v4-design.md           # v4 营销号流水线设计（📐 设计完成）
 │   ├── hierachy.md
 │   ├── tech.md
 │   └── experience.md
-├── input/                     # 输入资源
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/zxy/vidance/output/  # 软链到机械盘
 ```
@@ -304,7 +341,11 @@ vidance/
 
 ## 10. 部署记录
 
-各生图/生视频模型部署细节见：
-- `/mnt/disk_sdb/zxy/MiniMax-H3-部署记录.md`
-- `/mnt/disk_sdb/zxy/SDXL-部署记录.md`
-- `/mnt/disk_sdb/zxy/FLUX-部署记录.md`
+各模型部署细节见 `/mnt/disk_sdb/zxy/` 下：
+- `MiniMax-H3-部署记录.md` — H3 ref2va/fl2va + Qwen3-VL-32B + 双 VAE
+- `Wan2.2-部署记录.md` — Wan2.2-TI2V-5B + UMT5-XXL + VAE
+- `HunyuanVideo-部署记录.md` — HunyuanVideo 13B + LLaVA-Llama3 + CLIP-L + VAE
+- `SDXL-部署记录.md` — SDXL Base 1.0
+- `FLUX-部署记录.md` — FLUX.1-dev fp8 + T5-XXL + VAE（含 TripoSplat 共实例配置）
+
+> 模型文件统一存 `/mnt/dataset/zxy/<Model>-ComfyUI/`（mergerFS 机械盘），通过 `extra_model_paths.yaml` 映射到 ComfyUI。
