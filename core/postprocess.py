@@ -32,19 +32,28 @@ class PostProcessor:
 
     # ── RIFE 过渡 ──
 
-    def generate_transitions(self, clips: list, clips_dir: str, task_id: str) -> list:
+    def generate_transitions(self, clips: list, clips_dir: str, task_id: str,
+                             transition_types: list = None) -> list:
         """生成镜头间 RIFE 过渡视频。
 
         Args:
             clips: 视频片段路径列表
             clips_dir: 片段目录
             task_id: 任务 ID
+            transition_types: 每个边界的过渡类型列表 ['rife', 'crossfade', 'cut', ...]
+                长度 = len(clips) - 1。None 则全部用 'rife'。
+                只为 'rife' 类型生成过渡视频，其他类型返回 None。
 
         Returns:
-            过渡视频路径列表（长度 = len(clips) - 1），失败位置为 None
+            过渡视频路径列表（长度 = len(clips) - 1），'rife' 位置为路径或 None，
+            非 'rife' 位置为 None
         """
         if not self.rife_config.get('enabled', False) or len(clips) < 2:
             return []
+
+        n_trans = len(clips) - 1
+        if transition_types is None:
+            transition_types = ['rife'] * n_trans
 
         model = self.rife_config.get('model', 'rife_v4.26.safetensors')
         multiplier = self.rife_config.get('multiplier', 8)
@@ -60,10 +69,17 @@ class PostProcessor:
         trans_dir = os.path.join(clips_dir, 'transitions')
         os.makedirs(trans_dir, exist_ok=True)
 
-        for i in range(len(clips) - 1):
+        for i in range(n_trans):
+            trans_type = transition_types[i] if i < len(transition_types) else 'rife'
+
+            if trans_type != 'rife':
+                print(f'  transition {i+1}→{i+2}: skipped ({trans_type})')
+                transitions.append(None)
+                continue
+
             clip_a = clips[i]
             clip_b = clips[i + 1]
-            print(f'  transition {i+1}→{i+2}: ...', end=' ', flush=True)
+            print(f'  transition {i+1}→{i+2} (rife): ...', end=' ', flush=True)
 
             try:
                 n_a = get_video_frame_count(clip_a)
@@ -329,7 +345,8 @@ class PostProcessor:
                 duration: float = 0, srt_path: str = None,
                 no_rife: bool = False, lut_override: str = None,
                 no_color: bool = False, bgm_override: str = None,
-                no_bgm: bool = False, use_stt: bool = False) -> dict:
+                no_bgm: bool = False, use_stt: bool = False,
+                transition_types: list = None) -> dict:
         """一键执行全部后处理（RIFE→LUT→BGM→STT）。
 
         用于 custom 模式：concat 之后逐步施加。
@@ -343,7 +360,8 @@ class PostProcessor:
         # RIFE 过渡（需要在 concat 之前插入，这里只生成过渡片段）
         if not no_rife and self.rife_config.get('enabled', False) and len(clips) >= 2:
             print(f'\n=== [post] RIFE 过渡 ===')
-            result['transitions'] = self.generate_transitions(clips, clips_dir, task_id)
+            result['transitions'] = self.generate_transitions(
+                clips, clips_dir, task_id, transition_types=transition_types)
 
         # LUT 调色
         if not no_color and (self.color_config.get('enabled', False) or lut_override):

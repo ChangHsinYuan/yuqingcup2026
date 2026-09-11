@@ -5,21 +5,28 @@
   auto    概念 → LLM 编剧 → Wan/FLUX 生成 → 后处理（RIFE/LUT/BGM/STT）
   custom  参考图 + 预写脚本 → H3 ref2va 生成 → 后处理
   quick   纯 T2V，无角色锚无后处理
+  concat  多视频拼接（硬切 / RIFE 过渡 / 交叉淡化）
 
 用法:
   python core/vidance.py auto "雪山日出：小狐狸的冒险" --character "红色小狐狸" --character-mode flux --stt
+  python core/vidance.py auto "深海探险" --character "蓝色水母" --duration 60 --slowmo 2
   python core/vidance.py custom --ref input/doubao.jpg --ref input/naiwa.jpg --script input/prompt1.txt --lut cinematic --bgm dramatic
   python core/vidance.py quick "一只猫在月球上跳舞"
+  python core/vidance.py concat clip1.mp4 clip2.mp4 clip3.mp4 -o merged.mp4 --transition rife
 """
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.pipeline import Pipeline
-from core.custom_gen import run_custom
+from core.custom_gen import run_custom, concat_videos
+from core.postprocess import PostProcessor
 
 
 def cmd_auto(args):
@@ -41,6 +48,8 @@ def cmd_auto(args):
         lut_override=args.lut,
         bgm_override=args.bgm,
         use_stt=args.stt,
+        target_duration=args.duration,
+        slowmo_override=args.slowmo,
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -85,6 +94,89 @@ def cmd_quick(args):
     print(f'\nDone: {meta["output"]}')
 
 
+def _concat_cut(clips, output_path):
+    """硬切拼接（ffmpeg concat demuxer, stream copy）"""
+    list_path = output_path.replace('.mp4', '_concat.txt')
+    with open(list_path, 'w') as f:
+        for vp in clips:
+            f.write(f"file '{os.path.abspath(vp)}'\n")
+    cmd = [
+        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path,
+        '-c', 'copy', output_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    os.remove(list_path)
+    return output_path
+
+
+def _concat_crossfade(clips, output_path, duration=0.5):
+    """交叉淡化拼接（moviepy）"""
+    from moviepy import VideoFileClip, concatenate_videoclips
+    from moviepy.video.fx import CrossFadeIn
+
+    video_clips = []
+    for i, vp in enumerate(clips):
+        vc = VideoFileClip(vp)
+        if i > 0:
+            vc = vc.with_effects([CrossFadeIn(duration)])
+        video_clips.append(vc)
+
+    final = concatenate_videoclips(video_clips, method='compose')
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    final.write_videofile(output_path, codec='libx264', audio_codec='aac',
+                          fps=24, logger=None)
+    final.close()
+    for vc in video_clips:
+        vc.close()
+    return output_path
+
+
+def cmd_concat(args):
+    """concat 子命令：多视频拼接"""
+    clips = args.videos
+    for vp in clips:
+        if not os.path.isfile(vp):
+            print(f'错误: 文件不存在: {vp}')
+            sys.exit(1)
+
+    output_path = args.output
+    if output_path is None:
+        output_path = os.path.join(os.path.dirname(clips[0]), 'merged.mp4')
+    if not os.path.isabs(output_path):
+        from core.pipeline import CONFIG_PATH
+        config_path = CONFIG_PATH
+        with open(config_path) as f:
+            config = json.load(f)
+        output_path = os.path.join(config['output_dir'], output_path)
+
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    transition = args.transition
+    print(f'拼接 {len(clips)} 个视频 → {output_path} (transition={transition})')
+
+    if transition == 'cut':
+        _concat_cut(clips, output_path)
+    elif transition == 'rife':
+        with open(os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')) as f:
+            config = json.load(f)
+        post = PostProcessor(config)
+        tmpdir = tempfile.mkdtemp(prefix='vidance_concat_')
+        try:
+            transition_types = ['rife'] * (len(clips) - 1)
+            transitions = post.generate_transitions(clips, tmpdir, 'concat',
+                                                     transition_types=transition_types)
+            concat_videos(clips, output_path, transitions)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    elif transition == 'crossfade':
+        _concat_crossfade(clips, output_path, duration=args.crossfade_duration)
+
+    dur = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'csv=p=0', output_path],
+        capture_output=True, text=True).stdout.strip()
+    print(f'\nDone: {output_path} ({float(dur):.1f}s)')
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog='vidance',
@@ -126,6 +218,10 @@ def build_parser():
                         help='角色锚模式: auto(3DGS→flux降级) / 3dgs / flux (默认: auto)')
     p_auto.add_argument('--voice', default=None,
                         help='TTS 音色 (如 edge-moe, cosy-default)')
+    p_auto.add_argument('--duration', type=float, default=None,
+                        help='目标总时长（秒），动态调整镜头数（解锁长片，不指定则默认 2-5 镜）')
+    p_auto.add_argument('--slowmo', type=int, default=None,
+                        help='全局慢动作帧倍率（如 2 = 2x 慢放，覆盖所有镜头）')
     p_auto.set_defaults(func=cmd_auto)
 
     # ── custom 子命令 ──
@@ -146,6 +242,18 @@ def build_parser():
     p_quick.add_argument('--voice', default=None,
                          help='TTS 音色 (如 edge-moe)')
     p_quick.set_defaults(func=cmd_quick)
+
+    # ── concat 子命令 ──
+    p_concat = sub.add_parser('concat', parents=[output_parent],
+                              help='多视频拼接（硬切 / RIFE 过渡 / 交叉淡化）')
+    p_concat.add_argument('videos', nargs='+',
+                          help='待拼接的视频文件路径列表')
+    p_concat.add_argument('--transition', default='cut',
+                          choices=['cut', 'rife', 'crossfade'],
+                          help='过渡方式: cut(硬切) / rife(光流插帧) / crossfade(交叉淡化) (默认: cut)')
+    p_concat.add_argument('--crossfade-duration', type=float, default=0.5,
+                          help='交叉淡化时长（秒，仅 --transition crossfade 时生效）')
+    p_concat.set_defaults(func=cmd_concat)
 
     return parser
 

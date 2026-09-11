@@ -103,8 +103,14 @@ class LLMClient:
         data = base64.b64encode(buf.getvalue()).decode('ascii')
         return f'data:image/jpeg;base64,{data}'
 
-    def script_write(self, concept: str, character_desc: str = None) -> dict:
-        """概念→分镜脚本 JSON（v1: 含角色锚 + 每镜 camera 角度 + 背景描述）"""
+    def script_write(self, concept: str, character_desc: str = None,
+                     target_duration: float = None) -> dict:
+        """概念→分镜脚本 JSON（v1: 含角色锚 + 每镜 camera 角度 + 背景描述）
+
+        Args:
+            target_duration: 目标总时长（秒）。None 时默认 2-5 镜短片，
+                指定时按每镜~4s 动态计算镜头数（解锁长片）。
+        """
         char_section = ''
         if character_desc:
             char_section = (
@@ -112,8 +118,15 @@ class LLMClient:
                 f'    "desc": "{character_desc}"\n'
                 f'  }},\n'
             )
+        if target_duration:
+            n_shots = max(2, round(target_duration / 4))
+            shot_range = f'{max(2, n_shots - 2)}-{n_shots + 2}'
+            shot_instruction = f'创作一个约{shot_range}个镜头的分镜脚本，总时长约{target_duration:.0f}秒。'
+        else:
+            shot_instruction = '创作一个2-5个镜头的短片分镜脚本。'
+
         system = (
-            '你是视频编剧。根据用户给出的中文概念，创作一个2-5个镜头的短片分镜脚本。\n'
+            f'你是视频编剧。根据用户给出的中文概念，{shot_instruction}\n'
             '输出严格JSON格式，不要加任何解释文字。\n'
             'JSON schema:\n'
             '{\n'
@@ -134,7 +147,9 @@ class LLMClient:
             '        "fov": 35,\n'
             '        "distance": 0,\n'
             '        "desc": "镜头描述，如 wide shot, slow pan"\n'
-            '      }\n'
+            '      },\n'
+            '      "slowmo": {"multiplier": 2, "mode": "slowmo"},\n'
+            '      "transition_out": "rife"\n'
             '    }\n'
             '  ]\n'
             '}\n'
@@ -148,7 +163,9 @@ class LLMClient:
             '- camera.fov是视野角度（35=窄角特写，50=标准，70=广角）\n'
             '- camera.distance填0即可（自动取景）\n'
             '- 不同镜头用不同yaw角度展示角色多角度\n'
-            '- 镜头之间有叙事逻辑'
+            '- 镜头之间有叙事逻辑\n'
+            '- slowmo: 可选，对需要慢动作的镜头设置。multiplier为帧倍率（2=2倍慢放），mode为"slowmo"（慢放）或"smooth"（高帧率平滑）。不需要慢动作的镜头省略此字段\n'
+            '- transition_out: 此镜头到下一镜头的过渡方式。"rife"=光流插帧（默认，适合相邻场景），"crossfade"=交叉淡化（适合场景跳跃），"cut"=硬切（适合强对比）。最后一镜可省略'
         )
         messages = [
             {'role': 'system', 'content': system},

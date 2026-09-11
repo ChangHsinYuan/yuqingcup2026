@@ -2,13 +2,14 @@
 
 > 统一入口 `python core/vidance.py <子命令> [参数]`
 
-## 三种子命令
+## 四种子命令
 
 | 子命令 | 输入 | 引擎 | 角色 | 后处理 | 适用场景 |
 |--------|------|------|------|--------|----------|
 | `auto` | 一句中文概念 | Wan T2V/I2V + FLUX | 文字描述→FLUX 生图 | 可选 | 快速出片、自动编剧 |
 | `custom` | 参考图 + 预写脚本 | H3 ref2va | 三视图直接注入 | 可选 | 精确控制分镜、多角色 |
 | `quick` | 一句中文概念 | Wan T2V | 无 | 无 | 最快出片、无角色 |
+| `concat` | 多个视频文件 | — | — | — | 拼接已有素材 |
 
 ---
 
@@ -33,6 +34,12 @@ python core/vidance.py auto "雪山日出：小狐狸的冒险" \
 
 # 禁用部分后处理
 python core/vidance.py auto "概念" --character "角色" --no-rife --no-color --no-bgm
+
+# 长片模式（--duration 60 → 动态 ~15 镜，不传则默认 2-5 镜）
+python core/vidance.py auto "深海探险" --character "蓝色水母" --character-mode flux --duration 60
+
+# 全局慢动作（所有镜头 2x 帧倍增慢放）
+python core/vidance.py auto "概念" --character "角色" --slowmo 2
 ```
 
 ### auto 参数
@@ -43,6 +50,8 @@ python core/vidance.py auto "概念" --character "角色" --no-rife --no-color -
 | `--character` | 角色描述（中文） | 无（纯 T2V） |
 | `--character-mode` | `auto`/`3dgs`/`flux` | `auto` |
 | `--voice` | TTS 音色（如 `edge-moe`） | config 默认 |
+| `--duration` | 目标总时长（秒），动态调整镜头数 | 无（默认 2-5 镜） |
+| `--slowmo` | 全局慢动作帧倍率（2=2x 慢放） | 无（用 LLM 标注） |
 
 ---
 
@@ -113,6 +122,32 @@ python core/vidance.py quick "一只猫在月球上跳舞"
 # 指定音色
 python core/vidance.py quick "概念" --voice edge-xiaoxiao
 ```
+
+---
+
+## concat — 多视频拼接
+
+将多个视频文件拼合为一个，支持三种过渡方式。
+
+```bash
+# 硬切拼接（ffmpeg stream copy，最快）
+python core/vidance.py concat clip1.mp4 clip2.mp4 clip3.mp4 -o merged.mp4 --transition cut
+
+# RIFE 光流过渡（需 GPU2 ComfyUI 8189 在线）
+python core/vidance.py concat clip1.mp4 clip2.mp4 clip3.mp4 -o merged.mp4 --transition rife
+
+# 交叉淡化
+python core/vidance.py concat clip1.mp4 clip2.mp4 -o merged.mp4 --transition crossfade --crossfade-duration 0.5
+```
+
+### concat 参数
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `videos`（位置参数） | 待拼接视频文件列表 | 必填 |
+| `--transition` | `cut`/`rife`/`crossfade` | `cut` |
+| `--crossfade-duration` | 交叉淡化时长（秒） | `0.5` |
+| `-o/--output` | 输出路径 | `merged.mp4` |
 
 ---
 

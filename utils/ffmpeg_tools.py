@@ -108,6 +108,7 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
             transition: str = 'crossfade',
             transition_duration: float = 0.3,
             transition_clips: list = None,
+            transition_types: list = None,
             lut_path: str = None,
             bgm_path: str = None,
             bgm_volume: float = 0.3) -> str:
@@ -118,10 +119,15 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
         audio_paths: 对应音频路径列表 [shot_1.wav, shot_2.wav, ...]
         srt_path: SRT字幕文件路径（None则不烧字幕）
         output_path: 输出视频路径
-        transition: 转场类型 ('crossfade' 或 'cut')
+        transition: 全局转场类型 ('crossfade' 或 'cut')，仅当无 transition_types 时使用
         transition_duration: 转场时长（秒）
         transition_clips: 镜头间过渡视频路径列表 [trans_1.mp4, trans_2.mp4, ...]
                          长度 = len(clips) - 1，None 则不用 RIFE 过渡
+        transition_types: 每个边界的过渡类型 ['rife', 'crossfade', 'cut', ...]
+                         长度 = len(clips) - 1。优先于 transition 参数。
+                         'rife' → 插入 transition_clips 中的过渡片段
+                         'crossfade' → CrossFadeIn
+                         'cut' → 硬切
         lut_path: 3D LUT .cube 文件路径（None 则不调色）
         bgm_path: 背景音乐文件路径（None 则不加配乐）
         bgm_volume: BGM 基础音量 (0-1)
@@ -146,18 +152,35 @@ def compose(clips: list, audio_paths: list, srt_path: str = None,
 
         vc = vc.with_audio(ac)
 
-        if transition == 'crossfade' and i > 0 and not transition_clips:
-            vc = vc.with_effects([CrossFadeIn(transition_duration)])
+        # Determine transition type for this boundary (i-1 → i)
+        if i > 0:
+            if transition_types and i - 1 < len(transition_types):
+                t_type = transition_types[i - 1]
+            elif transition_clips:
+                t_type = 'rife'
+            else:
+                t_type = transition
+
+            if t_type == 'crossfade':
+                vc = vc.with_effects([CrossFadeIn(transition_duration)])
 
         video_clips.append(vc)
         all_audio_clips.append(ac)
 
-        # Insert RIFE transition clip between shots
-        if transition_clips and i < len(transition_clips):
-            trans_path = transition_clips[i]
-            if trans_path and os.path.isfile(trans_path):
-                tc = VideoFileClip(trans_path)
-                video_clips.append(tc)
+        # Insert RIFE transition clip between shots (only for 'rife' type)
+        if i < len(clips) - 1:
+            if transition_types and i < len(transition_types):
+                t_type = transition_types[i]
+            elif transition_clips:
+                t_type = 'rife'
+            else:
+                t_type = None
+
+            if t_type == 'rife' and transition_clips and i < len(transition_clips):
+                trans_path = transition_clips[i]
+                if trans_path and os.path.isfile(trans_path):
+                    tc = VideoFileClip(trans_path)
+                    video_clips.append(tc)
 
     final_video = concatenate_videoclips(video_clips, method='compose')
 

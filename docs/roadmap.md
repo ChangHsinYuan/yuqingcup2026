@@ -173,19 +173,20 @@
 
 **详细设计**：见 [v1-design.md](./v1-design.md)
 
-### v2 — 长视频（✅ 核心完成，v2.1 backlog）
+### v2 — 长视频（✅ 核心完成，v2.1 backlog 已接线）
 
 **目标**：超出单次生成上限的长片 + 完整后期。**建立在 v1 角色一致性之上**（长片仍需跨镜头角色不漂移）。
 
 **状态**：2026-09-09 M1-M5 核心完成，端到端验证通过（3 次测试，10-20s 成片/3-4 镜）。RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕全链路跑通。编码 yuv420p + 字幕重叠 bug 已修复。
 
-**未验证/未实现（→ v2.1 backlog）**：
-- 长片验证（5-15 镜/60s+）：LLM prompt 硬编码 "2-5个镜头"（`llm.py:116`），未跑过长片
-- 单镜慢动作：`rife.py:91` `slowmo()` 已写好但 pipeline 未接线
-- per-shot 过渡类型：pipeline 对所有镜头统一 RIFE，不读 `transition_out` 字段
-- 后期审片 4 维（color/bgm/transition/audio）：未实现
-- music subagent：简化为 pipeline 内联 LLM 调用（功能等价）
-- MiniMax-H3 评估（M6）：✅ 已完成，H3 ref2va 接入 custom 模式，13 个分镜脚本测试通过
+**v2.1 backlog 接线**（2026-09-11 完成）：
+- ✅ 长片能力：`--duration N` CLI → `llm.script_write(target_duration)` 动态计算镜头数（N/4 镜），不再硬编码 2-5 镜
+- ✅ 单镜慢动作：`--slowmo N` 全局倍率 + LLM 自动标注 `shot.slowmo`，pipeline 调用 `RIFEClient.slowmo()` 帧倍增
+- ✅ per-shot 过渡类型：LLM 标注 `shot.transition_out: "rife"|"crossfade"|"cut"`，pipeline 按类型分流，compose 支持混合过渡
+- ✅ `--duration` CLI：已加入 auto 子命令
+- ✅ concat 子命令：`vidance.py concat` 多视频拼接（cut/rife/crossfade）
+- ⏭ 后期审片 4 维：跳过（API 不稳定，投入产出比低）
+- ⏭ music subagent：保持内联简化（功能等价）
 
 - **M1 RIFE 光流插帧** ✅：镜头间光流过渡（rife_v4.26，multiplier=8，0.375s@24fps），替代 crossfade 硬拼接。`rife_transition.json` workflow + `RIFEClient` + pipeline 集成
 - **M2 镜头并行预取** ✅：ThreadPoolExecutor 并行预取所有镜头的 FLUX 参考帧（GPU0）+ TTS 配音（9880），与 Wan I2V（GPU2）串行执行不冲突，总耗时显著缩短
@@ -220,6 +221,22 @@
 - 向后兼容旧入口（pipeline.py / custom_gen.py 仍可直跑）
 
 **详细设计**：见 [v2.5-design.md](./v2.5-design.md)
+
+### v2.1 — Backlog 接线 + 全片拼接（✅ 已完成）
+
+**目标**：接线 v2 设计中积压的功能项 + 拼接 13 个 prompt 成完整展示片。
+
+**状态**：2026-09-11 完成。4 项 backlog 接线 + 2 版全片拼接 + concat 子命令。
+
+- **`--duration` + 长片能力** ✅：`llm.script_write(target_duration)` 动态计算镜头数，`--duration 60` → ~15 镜
+- **slowmo 接线** ✅：`--slowmo N` 全局倍率 + LLM 自动标注 `shot.slowmo`，pipeline `_process_shot()` 调用 `RIFEClient.slowmo()` 帧倍增
+- **per-shot transition_out** ✅：LLM 标注 `transition_out: "rife"|"crossfade"|"cut"`，`generate_transitions()` 按类型分流，`compose()` 支持混合过渡
+- **concat 子命令** ✅：`vidance.py concat` 多视频拼接（cut/rife/crossfade），可复用于已有素材合并
+- **13 prompt 全片拼接** ✅：硬切版 96.6s/38MB + RIFE 过渡版 101.1s/45MB，输出 `episode1_hardcut.mp4` / `episode1_rife.mp4`
+- **后期审片 4 维** ⏭：跳过（API 不稳定，投入产出比低）
+- **music subagent** ⏭：保持内联简化（功能等价）
+
+**涉及文件**：`vidance.py`（concat 子命令 + --duration/--slowmo）、`pipeline.py`（slowmo 接线 + transition_types）、`postprocess.py`（generate_transitions transition_types）、`ffmpeg_tools.py`（compose 混合过渡）、`llm.py`（script_write target_duration + slowmo/transition_out schema）
 
 ### v3 — 2D→3D→新视角（📐 设计完成，⚠️ 有阻塞）
 

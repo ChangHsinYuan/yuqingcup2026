@@ -71,7 +71,7 @@ vidance/
 
 ### 统一入口 `core/vidance.py`（推荐）
 
-三个子命令：`auto`（LLM 编剧+生成+后处理）、`custom`（参考图+脚本→H3→后处理）、`quick`（纯 T2V）。
+四个子命令：`auto`（LLM 编剧+生成+后处理）、`custom`（参考图+脚本→H3→后处理）、`quick`（纯 T2V）、`concat`（多视频拼接）。
 
 ```bash
 # ── auto：概念 → LLM 编剧 → Wan/FLUX 生成 → 后处理 ──
@@ -83,6 +83,12 @@ python core/vidance.py auto "一只猫在月球上跳舞" --character "穿宇航
 
 # 指定调色风格和配乐 mood
 python core/vidance.py auto "深海探险" --character "蓝色水母" --character-mode flux --lut cool --bgm mysterious
+
+# 长片模式（动态镜头数，目标 60s → ~15 镜）
+python core/vidance.py auto "深海探险" --character "蓝色水母" --character-mode flux --duration 60
+
+# 全局慢动作（所有镜头 2x 慢放）
+python core/vidance.py auto "概念" --character "角色" --slowmo 2
 
 # 禁用部分功能
 python core/vidance.py auto "概念" --character "角色" --no-rife --no-color --no-bgm
@@ -98,26 +104,39 @@ python core/vidance.py custom --ref input/doubao.jpg --script input/prompt1.txt 
 
 # ── quick：纯 T2V，无角色无后处理 ──
 python core/vidance.py quick "一只猫在月球上跳舞"
+
+# ── concat：多视频拼接 ──
+# 硬切拼接（ffmpeg stream copy，最快）
+python core/vidance.py concat clip1.mp4 clip2.mp4 clip3.mp4 -o merged.mp4 --transition cut
+# RIFE 光流过渡（需 GPU2 ComfyUI 8189 在线）
+python core/vidance.py concat clip1.mp4 clip2.mp4 clip3.mp4 -o merged.mp4 --transition rife
+# 交叉淡化
+python core/vidance.py concat clip1.mp4 clip2.mp4 -o merged.mp4 --transition crossfade --crossfade-duration 0.5
 ```
 
 **参数速查**：
 
-| 参数 | auto | custom | quick | 说明 |
-|------|:----:|:------:|:-----:|------|
-| `concept` (位置参数) | ✓ | — | ✓ | 视频概念（中文） |
-| `-o/--output` | ✓ | ✓ | ✓ | 输出路径（相对→output_dir） |
-| `--character` | ✓ | — | — | 角色描述（中文） |
-| `--character-mode` | ✓ | — | — | auto/3dgs/flux |
-| `--voice` | ✓ | — | ✓ | TTS 音色 |
-| `--ref` | — | ✓ (可重复) | — | 角色参考图 |
-| `--script` | — | ✓ | — | 分镜脚本路径 |
-| `--ref-image-size` | — | ✓ | — | match/max |
-| `--lut` | ✓ | ✓ | — | LUT 风格 |
-| `--no-color` | ✓ | ✓ | — | 禁用调色 |
-| `--bgm` | ✓ | ✓ | — | BGM mood |
-| `--no-bgm` | ✓ | ✓ | — | 禁用 BGM |
-| `--no-rife` | ✓ | ✓ | — | 禁用 RIFE 过渡 |
-| `--stt` | ✓ | ✓ | — | STT 字幕对齐 |
+| 参数 | auto | custom | quick | concat | 说明 |
+|------|:----:|:------:|:-----:|:------:|------|
+| `concept` (位置参数) | ✓ | — | ✓ | — | 视频概念（中文） |
+| `videos` (位置参数) | — | — | — | ✓ | 待拼接视频文件列表 |
+| `-o/--output` | ✓ | ✓ | ✓ | ✓ | 输出路径（相对→output_dir） |
+| `--character` | ✓ | — | — | — | 角色描述（中文） |
+| `--character-mode` | ✓ | — | — | — | auto/3dgs/flux |
+| `--voice` | ✓ | — | ✓ | — | TTS 音色 |
+| `--duration` | ✓ | — | — | — | 目标总时长（秒），动态镜头数 |
+| `--slowmo` | ✓ | — | — | — | 全局慢动作倍率 |
+| `--ref` | — | ✓ (可重复) | — | — | 角色参考图 |
+| `--script` | — | ✓ | — | — | 分镜脚本路径 |
+| `--ref-image-size` | — | ✓ | — | — | match/max |
+| `--transition` | — | — | — | ✓ | cut/rife/crossfade |
+| `--crossfade-duration` | — | — | — | ✓ | 交叉淡化时长 |
+| `--lut` | ✓ | ✓ | — | — | LUT 风格 |
+| `--no-color` | ✓ | ✓ | — | — | 禁用调色 |
+| `--bgm` | ✓ | ✓ | — | — | BGM mood |
+| `--no-bgm` | ✓ | ✓ | — | — | 禁用 BGM |
+| `--no-rife` | ✓ | ✓ | — | — | 禁用 RIFE 过渡 |
+| `--stt` | ✓ | ✓ | — | — | STT 字幕对齐 |
 
 > 旧入口 `python core/pipeline.py ...` 和 `python core/custom_gen.py ...` 仍可用（向后兼容），但推荐使用 `vidance.py`。
 
@@ -228,9 +247,10 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 6. **LUT 为程序生成**（v2）：numpy 生成 6 种风格 3D LUT，效果不如专业 LUT 包，留 `color.lut_dir` 自定义路径
 7. **STT 默认关闭**（v2）：TTS 时间戳通常够用，`--stt` 仅在需要重新对齐时开启（额外 GPU 显存+耗时）
 8. **视频编码统一 yuv420p**（v2 修复）：LUT 调色 + STT 烧录的 ffmpeg 命令均加 `-pix_fmt yuv420p`，确保所有播放器兼容（之前 lut3d 滤镜导致输出 yuv444p，部分播放器无法播放）
-9. **长片未验证**（v2 backlog）：LLM 编剧 prompt 硬编码 "2-5个镜头"（`llm.py:116`），3 次测试均为 3-4 镜/10-20s，未跑过 5-15 镜长片
-10. **单镜慢动作未接入**（v2 backlog）：`rife.py:91` `slowmo()` 方法已实现，但 pipeline 从未调用，LLM prompt 也不生成 `shot.slowmo` 字段
-11. **per-shot 过渡类型未实现**（v2 backlog）：pipeline 对所有相邻镜头统一 RIFE，不读 `transition_out` 字段，大跨场景无法降级 crossfade
-12. **后期审片 4 维未实现**（v2 backlog）：设计 §8.1 定义 color_consistency/bgm_fit/transition_smooth/audio_balance，pipeline 无整片审片环节（逐镜审片复用 v1 四维）
+9. **~~长片未验证~~ → 已实现**（v2.1）：`--duration N` CLI 动态调整 LLM 编剧镜头数（`target_duration/4` 镜），解锁长片能力
+10. **~~单镜慢动作未接入~~ → 已实现**（v2.1）：`--slowmo N` 全局慢动作 + LLM 自动标注 `shot.slowmo`，pipeline 调用 `RIFEClient.slowmo()` 帧倍增
+11. **~~per-shot 过渡类型未实现~~ → 已实现**（v2.1）：LLM 标注 `shot.transition_out: "rife"|"crossfade"|"cut"`，pipeline 按类型分流过渡，compose 支持混合过渡
+12. **后期审片 4 维**（v2.1 跳过）：API 不稳定，投入产出比低，保留逐镜审片
 13. **music subagent 简化**（v2 偏差）：设计 §8.2 定义独立 music subagent，实际简化为 pipeline 内联 LLM 调用（`llm.select_bgm_mood()`），功能等价
-14. **无 `--duration` CLI**（v2 backlog）：设计 §10 验收命令含 `--duration 90`，实际未加 argparse 参数
+14. **~~无 `--duration` CLI~~ → 已实现**（v2.1）：`--duration` 已加入 auto 子命令
+15. **concat 子命令**（v2.1 新增）：`vidance.py concat` 支持多视频拼接（cut/rife/crossfade），可复用于已有素材合并

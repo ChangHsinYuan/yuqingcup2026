@@ -22,6 +22,7 @@ from utils.tts import TTSClient
 from utils.comfy_api import ComfyClient
 from utils.splat_renderer import render_splat_at_angle, render_splat_angles
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
+from utils.rife import RIFEClient
 from core.postprocess import PostProcessor
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
@@ -49,11 +50,22 @@ class Pipeline:
         self.stt_config = self.config.get('stt', {})
         self.max_retries = 2
         self.post = PostProcessor(self.config, llm=self.llm)
+        self._rife_client = None
+
+    def _get_rife_client(self):
+        """Lazy-init RIFE client for slowmo."""
+        if self._rife_client is None:
+            model = self.rife_config.get('model', 'rife_v4.26.safetensors')
+            self._rife_client = RIFEClient(
+                config=self.config, instance='wan', model_name=model)
+        return self._rife_client
 
     def run(self, concept: str, output_path: str = None,
             character_desc: str = None, voice: str = None,
             character_mode: str = 'auto', lut_override: str = None,
-            bgm_override: str = None, use_stt: bool = False) -> dict:
+            bgm_override: str = None, use_stt: bool = False,
+            target_duration: float = None,
+            slowmo_override: int = None) -> dict:
         """端到端生成有声短片
 
         character_mode:
@@ -61,6 +73,8 @@ class Pipeline:
           '3dgs' — 强制 3DGS 角色锚（FLUX→TripoSplat→3DGS→RenderSplat→I2V）
           'flux' — 每镜 FLUX 直接生成角色+场景图做 I2V 参考（不重建 3D）
           不传 character_desc 时走 v0 纯 T2V
+        target_duration: 目标总时长（秒），None 时默认 2-5 镜短片
+        slowmo_override: 全局慢动作帧倍率，覆盖所有镜头（None 则用 LLM 标注）
         """
         task_id = time.strftime('%Y%m%d_%H%M%S')
         task_dir = os.path.join(self.output_dir, task_id)
@@ -87,7 +101,8 @@ class Pipeline:
 
         # ── 1. 编剧 ──
         print('\n=== [1] 编剧 ===')
-        script = self.llm.script_write(concept, character_desc=character_desc)
+        script = self.llm.script_write(concept, character_desc=character_desc,
+                                        target_duration=target_duration)
         meta['script'] = script
         print(f'  title: {script["title"]}')
         print(f'  shots: {len(script["shots"])}')
@@ -158,6 +173,7 @@ class Pipeline:
             clip_info = self._process_shot(
                 shot, clips_dir, task_id, character, voice,
                 prefetched=prefetched.get(sid),
+                slowmo_override=slowmo_override,
             )
             meta['clips'].append(clip_info)
             all_clips.append(clip_info['final_video'])
@@ -173,9 +189,14 @@ class Pipeline:
 
         # ── 4.5 RIFE 镜头间过渡 ──
         transition_clips = []
+        transition_types = []
         if self.rife_config.get('enabled', False) and len(all_clips) >= 2:
             print(f'\n=== [4.5] RIFE 镜头间过渡 ===')
-            transition_clips = self.post.generate_transitions(all_clips, clips_dir, task_id)
+            for shot in script['shots'][:-1]:
+                transition_types.append(shot.get('transition_out', 'rife'))
+            print(f'  transition types: {transition_types}')
+            transition_clips = self.post.generate_transitions(
+                all_clips, clips_dir, task_id, transition_types=transition_types)
 
         # ── 5. 合成 ──
         print('\n=== [5] 合成 ===')
@@ -213,6 +234,7 @@ class Pipeline:
             transition='cut' if transition_clips else 'crossfade',
             transition_duration=0.3,
             transition_clips=transition_clips or None,
+            transition_types=transition_types or None,
             lut_path=lut_path,
             bgm_path=bgm_path,
             bgm_volume=self.bgm_config.get('volume', 0.3),
@@ -393,11 +415,13 @@ class Pipeline:
 
     def _process_shot(self, shot: dict, clips_dir: str, task_id: str,
                       character: dict = None, voice: str = None,
-                      prefetched: dict = None) -> dict:
+                      prefetched: dict = None,
+                      slowmo_override: int = None) -> dict:
         """处理单个镜头：背景生成 → 合成参考帧 → I2V + TTS + 抽帧 + 审片 + 重试
 
         Args:
             prefetched: 预取数据 {'composite_ref': str, 'audio': dict} 或 None
+            slowmo_override: 全局慢动作帧倍率，覆盖 LLM 标注
         """
         sid = shot['id']
         duration = shot.get('duration', 5)
@@ -514,13 +538,34 @@ class Pipeline:
                     shot.get('style', ''),
                 )
 
+        # ── 慢动作后处理 ──
+        final_video = best['video']
+        slowmo_info = None
+        slowmo_cfg = shot.get('slowmo')
+        if slowmo_override:
+            slowmo_cfg = {'multiplier': slowmo_override, 'mode': 'slowmo'}
+        if slowmo_cfg and slowmo_cfg.get('multiplier', 1) > 1:
+            mult = slowmo_cfg['multiplier']
+            print(f'\n  [slowmo] RIFE {mult}x frame interpolation...')
+            slowmo_out = os.path.join(clips_dir, f'shot_{sid}_slowmo.mp4')
+            try:
+                client = self._get_rife_client()
+                result = client.slowmo(final_video, slowmo_out,
+                                       multiplier=mult, fps=self.i2v_defaults.get('fps', 24))
+                final_video = slowmo_out
+                slowmo_info = result
+                print(f'  [slowmo] done: {result["frame_count"]} frames')
+            except Exception as e:
+                print(f'  ⚠ slowmo failed: {e}, using original video')
+
         return {
             'shot_id': sid,
             'camera': camera,
             'attempts': attempts,
-            'final_video': best['video'],
+            'final_video': final_video,
             'composite_ref': best.get('composite_ref'),
             'final_score': best['review']['score'],
+            'slowmo': slowmo_info,
             'audio': {
                 'narration': shot['narration'],
                 'audio_path': audio_path,
@@ -608,6 +653,10 @@ if __name__ == '__main__':
                         help='Disable background music')
     parser.add_argument('--stt', action='store_true',
                         help='Use faster-whisper STT for subtitle alignment (overrides TTS timestamps)')
+    parser.add_argument('--duration', type=float, default=None,
+                        help='Target total duration in seconds (enables long-form: dynamically scales shot count)')
+    parser.add_argument('--slowmo', type=int, default=None,
+                        help='Global slowmo multiplier (e.g. 2 = 2x slow motion on all shots)')
     args = parser.parse_args()
 
     pipeline = Pipeline()
@@ -622,5 +671,7 @@ if __name__ == '__main__':
                         character_mode=args.character_mode,
                         lut_override=args.lut,
                         bgm_override=args.bgm,
-                        use_stt=args.stt)
+                        use_stt=args.stt,
+                        target_duration=args.duration,
+                        slowmo_override=args.slowmo)
     print(f'\nDone: {meta["output"]}')

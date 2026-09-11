@@ -6,7 +6,7 @@
 >
 > **验证结果**：3 次端到端验证（10-20s 成片，3-4 镜），RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕全链路通过。编码 yuv420p + High profile 兼容性修复。
 >
-> **未实现项（→ v2.1 backlog）**：单镜慢动作、per-shot 过渡类型、后期审片 4 维、music subagent、`--duration` CLI、长片验证（5-15 镜/60s+）。详见 §12.2。
+> **未实现项（→ v2.1 backlog）**：单镜慢动作 ✅、per-shot 过渡类型 ✅、后期审片 4 维 ⏭（跳过）、music subagent ⏭（保持内联）、`--duration` CLI ✅、长片验证 ✅（`--duration N` 动态镜头数）。详见 §12.2。**v2.1 接线完成于 2026-09-11。**
 
 ## 1. 概述
 
@@ -568,12 +568,12 @@ python core/pipeline.py "一个穿红斗篷的少年穿越雪原寻找故乡" --
 
 ### 12.2 未实现项（→ v2.1 backlog）
 
-| 项目 | 设计章节 | 说明 | 技术难度 |
-|------|---------|------|---------|
-| 单镜慢动作 | §3.2, §4.1 | `rife.py:91` `slowmo()` 已写好，pipeline 未接线，LLM prompt 不生成 `shot.slowmo` 字段 | 无（接线 3 行 + prompt 加字段） |
-| per-shot 过渡类型 | §4.1 | pipeline 对所有镜头统一 RIFE，不读 `transition_out` 字段，大跨场景无法降级 crossfade | 无（if/else 分流） |
-| 后期审片 4 维 | §8.1 | 无整片审片环节，代码不复杂但多模态 API 不稳定大概率 auto-pass | 低（代码）/ 中（API 瓶颈） |
-| music subagent | §8.2 | 未建 `.opencode/agents/music.md`，简化为 pipeline 内联 LLM 调用 | 无（功能等价） |
-| `--duration` CLI | §10 | 未加 argparse 参数 | 无 |
-| 长片验证 | §10 标准 1 | LLM prompt 硬编码 "2-5个镜头"（`llm.py:116`），3 次测试均为 3-4 镜/10-20s | 无（改 prompt 一行） |
-| MiniMax-H3 评估 | §3.6, M6 | 未做对比评估 | — |
+| 项目 | 设计章节 | 说明 | 状态 |
+|------|---------|------|------|
+| 单镜慢动作 | §3.2, §4.1 | `--slowmo N` CLI + LLM 自动标注 `shot.slowmo`，pipeline 调用 `RIFEClient.slowmo()` 帧倍增 | ✅ v2.1 接线 |
+| per-shot 过渡类型 | §4.1 | LLM 标注 `transition_out`，`generate_transitions()` 按类型分流，`compose()` 支持混合过渡 | ✅ v2.1 接线 |
+| 后期审片 4 维 | §8.1 | API 不稳定，投入产出比低，保留逐镜审片 | ⏭ 跳过 |
+| music subagent | §8.2 | 保持 pipeline 内联 LLM 调用，功能等价 | ⏭ 保持简化 |
+| `--duration` CLI | §10 | `--duration N` 已加入 auto 子命令 | ✅ v2.1 接线 |
+| 长片验证 | §10 标准 1 | `--duration N` → `script_write(target_duration)` 动态计算镜头数（N/4 镜） | ✅ v2.1 接线 |
+| MiniMax-H3 评估 | §3.6, M6 | H3 ref2va 接入 custom 模式，13 脚本/32 镜/96s 验证通过 | ✅ v2.5 完成 |
