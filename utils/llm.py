@@ -308,6 +308,53 @@ class LLMClient:
                 return mood
         return available_moods[0]
 
+    def describe_character(self, image_path: str, name: str = None) -> str:
+        """多模态：看角色三视图→英文详细外观描述（供 FLUX T2I prompt 用）"""
+        name_hint = f' This character is called "{name}".' if name else ''
+        system = (
+            'You are a character designer. Look at the character reference sheet (three-view / turnaround)'
+            f' and write a detailed English description of the character\'s appearance.{name_hint}\n'
+            'Include: species/type, body shape and proportions, skin/fur/color, facial features, '
+            'clothing (style, color, texture, condition), accessories, and any distinctive features.\n'
+            'Output ONLY the English description text, no JSON, no explanation, no markdown. '
+            'Keep it under 120 words.'
+        )
+        content = [
+            {'type': 'text', 'text': 'Describe this character in detail for an image generation prompt.'},
+            {'type': 'image_url', 'image_url': {'url': self._image_to_base64(image_path)}},
+        ]
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': content},
+        ]
+        return self.chat(messages, model=self.models['review'], temperature=0.3, timeout=120, retries=1).strip()
+
+    def combine_scene_prompt(self, char_descs: list, scene_setting: str,
+                              shot_desc: str, style: str = '') -> str:
+        """角色描述+全局场景+镜头描述→英文 FLUX T2I prompt（多角色场景图）"""
+        char_section = '\n'.join(f'Character {i+1}: {d}' for i, d in enumerate(char_descs))
+        system = (
+            'You are an image generation prompt writer. Combine character descriptions, scene setting,'
+            ' and shot description into a single English FLUX image generation prompt.\n'
+            'Requirements:\n'
+            '- All characters must appear in the scene with correct spatial positions as described\n'
+            '- Preserve every character appearance detail from the descriptions\n'
+            '- Describe the environment, lighting, and camera angle precisely\n'
+            '- English, under 150 words\n'
+            '- Output ONLY the prompt text, no explanation'
+        )
+        user_text = (
+            f'{char_section}\n\n'
+            f'Scene setting: {scene_setting}\n'
+            f'Shot description: {shot_desc}\n'
+            f'Style: {style}' if style else ''
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user_text},
+        ]
+        return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
+
     def review_shot(self, scene_desc: str, frame_paths: list,
                     model: str = None, character_ref: str = None) -> dict:
         """多模态审片：关键帧+场景描述→{score, dimensions, feedback, pass}

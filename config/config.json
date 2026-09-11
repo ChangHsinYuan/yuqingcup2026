@@ -14,7 +14,8 @@
     "hunyuan": {"host": "127.0.0.1", "port": 8190},
     "sdxl": {"host": "127.0.0.1", "port": 8191},
     "flux": {"host": "127.0.0.1", "port": 8192},
-    "triposplat": {"host": "127.0.0.1", "port": 8192}
+    "triposplat": {"host": "127.0.0.1", "port": 8192},
+    "h3": {"host": "127.0.0.1", "port": 8188}
   },
   "tts": {
     "host": "127.0.0.1",

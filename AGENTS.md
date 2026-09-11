@@ -6,6 +6,8 @@
 
 Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核心流程：中文概念→LLM编剧→Wan T2V生成→双引擎TTS配音→多模态审片→ffmpeg合成→有声短片。
 
+**统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
+
 **当前状态：v2 长视频完成**（2026-09-09），详见 [docs/v2-design.md](./docs/v2-design.md)。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
@@ -32,9 +34,13 @@ vidance/
 ├── opencode.json              # opencode 配置（agents + permissions）
 ├── AGENTS.md                  # 本文件
 ├── config/config.json         # 运行时配置（API key、引擎地址、模型名、音色）
-├── core/pipeline.py           # 端到端流水线主控
+├── core/
+│   ├── vidance.py             # 统一 CLI 入口（auto/custom/quick 三个子命令）
+│   ├── pipeline.py            # auto 模式流水线主控（内部模块）
+│   ├── custom_gen.py          # custom 模式 H3 ref2va 生成（内部模块）
+│   └── postprocess.py         # 共享后处理（RIFE/LUT/BGM/STT）
 ├── utils/
-│   ├── comfy_api.py           # ComfyUI HTTP 客户端（T2V/I2V/TripoSplat/FLUX T2I）
+│   ├── comfy_api.py           # ComfyUI HTTP 客户端（T2V/I2V/TripoSplat/FLUX T2I/H3 ref2va）
 │   ├── llm.py                 # USTC LLM 客户端（编剧/prompt优化/审片，含图片缩放+重试）
 │   ├── tts.py                 # TTS 客户端（双引擎：edge-tts + CosyVoice）
 │   ├── tts_server.py          # TTS FastAPI 服务（双引擎，GPU2:9880）
@@ -63,28 +69,57 @@ vidance/
 
 ## 运行命令
 
-### 全自动生成短片（v2 长视频 + v1.1 角色一致性）
+### 统一入口 `core/vidance.py`（推荐）
+
+三个子命令：`auto`（LLM 编剧+生成+后处理）、`custom`（参考图+脚本→H3→后处理）、`quick`（纯 T2V）。
+
 ```bash
+# ── auto：概念 → LLM 编剧 → Wan/FLUX 生成 → 后处理 ──
 # v2 全功能：RIFE 过渡 + 并行预取 + LUT 调色 + BGM ducking + STT 字幕
-python core/pipeline.py "雪山日出：小狐狸的第一次冒险" --character "红色小狐狸" --character-mode flux --stt
+python core/vidance.py auto "雪山日出：小狐狸的冒险" --character "红色小狐狸" --character-mode flux --stt
 
-# v1.1 auto 模式（默认）：先试 3DGS，审查不过自动降级 flux
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫"
-
-# flux 模式：每镜 FLUX 直接生成角色+场景图，不重建 3D（推荐，质量更稳定）
-python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux
+# auto 模式（默认 3DGS→flux 降级）
+python core/vidance.py auto "一只猫在月球上跳舞" --character "穿宇航服的白猫"
 
 # 指定调色风格和配乐 mood
-python core/pipeline.py "深海探险" --character "蓝色水母" --character-mode flux --lut cool --bgm mysterious
+python core/vidance.py auto "深海探险" --character "蓝色水母" --character-mode flux --lut cool --bgm mysterious
 
 # 禁用部分功能
-python core/pipeline.py "概念" --character "角色" --no-rife --no-color --no-bgm
+python core/vidance.py auto "概念" --character "角色" --no-rife --no-color --no-bgm
+
+# ── custom：参考图 + 预写脚本 → H3 ref2va → 后处理 ──
+python core/vidance.py custom --ref input/doubao.jpg --ref input/naiwa.jpg --script input/prompt1.txt
+
+# custom + 后处理
+python core/vidance.py custom --ref input/doubao.jpg --ref input/naiwa.jpg --script input/prompt1.txt --lut cinematic --bgm dramatic --stt
+
+# custom 高保真模式（2048px 参考图，慢 2-3x）
+python core/vidance.py custom --ref input/doubao.jpg --script input/prompt1.txt --ref-image-size max
+
+# ── quick：纯 T2V，无角色无后处理 ──
+python core/vidance.py quick "一只猫在月球上跳舞"
 ```
 
-### v0 纯 T2V（无角色锚）
-```bash
-python core/pipeline.py "一只猫在月球上跳舞"
-```
+**参数速查**：
+
+| 参数 | auto | custom | quick | 说明 |
+|------|:----:|:------:|:-----:|------|
+| `concept` (位置参数) | ✓ | — | ✓ | 视频概念（中文） |
+| `-o/--output` | ✓ | ✓ | ✓ | 输出路径（相对→output_dir） |
+| `--character` | ✓ | — | — | 角色描述（中文） |
+| `--character-mode` | ✓ | — | — | auto/3dgs/flux |
+| `--voice` | ✓ | — | ✓ | TTS 音色 |
+| `--ref` | — | ✓ (可重复) | — | 角色参考图 |
+| `--script` | — | ✓ | — | 分镜脚本路径 |
+| `--ref-image-size` | — | ✓ | — | match/max |
+| `--lut` | ✓ | ✓ | — | LUT 风格 |
+| `--no-color` | ✓ | ✓ | — | 禁用调色 |
+| `--bgm` | ✓ | ✓ | — | BGM mood |
+| `--no-bgm` | ✓ | ✓ | — | 禁用 BGM |
+| `--no-rife` | ✓ | ✓ | — | 禁用 RIFE 过渡 |
+| `--stt` | ✓ | ✓ | — | STT 字幕对齐 |
+
+> 旧入口 `python core/pipeline.py ...` 和 `python core/custom_gen.py ...` 仍可用（向后兼容），但推荐使用 `vidance.py`。
 
 ### 启动 TTS 服务
 ```bash
@@ -126,6 +161,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 
 | 服务 | 端口 | GPU | 环境 |
 |------|------|-----|------|
+| MiniMax-H3 ref2va (ComfyUI) | 8188 | GPU0 | comfyui |
 | Wan T2V/I2V (ComfyUI) | 8189 | GPU2 | comfyui |
 | HunyuanVideo (ComfyUI) | 8190 | GPU3 | comfyui |
 | SDXL (ComfyUI) | 8191 | GPU1 | comfyui |
@@ -133,6 +169,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | TTS 双引擎 (edge-tts + CosyVoice) | 9880 | GPU2 | cosyvoice |
 
 > TripoSplat 与 FLUX 共用 GPU0:8192 同一 ComfyUI 实例（串行调用，不抢资源）。
+> H3 (8188) 独占 GPU0，用于 custom 模式参考图条件视频生成。
 
 ## 关键约定
 

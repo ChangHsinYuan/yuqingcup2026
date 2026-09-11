@@ -437,6 +437,166 @@ class ComfyClient:
         return result
 
 
+    def generate_h3_ref2v(self, prompt: str, ref_image_paths: list,
+                          seed: int = None,
+                          width: int = 1344, height: int = 768,
+                          length: int = 124, steps: int = 20,
+                          ref_image_size: str = "match",
+                          filename_prefix: str = 'vidance/h3_ref2v',
+                          output_path: str = None) -> dict:
+        """H3 ref2va: reference images + prompt -> video with native audio.
+
+        Reference images are re-injected at every denoising step to lock
+        character identity.  Prompt uses <Picture 1>, <Picture 2>, ... to
+        reference images in order.
+        """
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        # Snap frame count to H3's 17k+5 grid
+        aligned_length = length
+        while aligned_length % 17 != 5:
+            aligned_length += 1
+
+        # Upload reference images
+        ref_image_names = []
+        for ref_path in ref_image_paths:
+            name = self.upload_image(ref_path, overwrite=True)
+            ref_image_names.append(name)
+
+        # Build workflow programmatically (ref image count is variable)
+        wf = {}
+        wf["1"] = {"class_type": "UNETLoader", "inputs": {
+            "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            "weight_dtype": "default",
+        }}
+        wf["2"] = {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+            "type": "minimax",
+        }}
+        wf["3"] = {"class_type": "VAELoader", "inputs": {
+            "vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        }}
+        wf["4"] = {"class_type": "VAELoader", "inputs": {
+            "vae_name": "minimax_h3_audio_vae_fp32.safetensors",
+        }}
+
+        next_id = 5
+        load_image_ids = []
+        for img_name in ref_image_names:
+            nid = str(next_id)
+            wf[nid] = {"class_type": "LoadImage", "inputs": {"image": img_name}}
+            load_image_ids.append(nid)
+            next_id += 1
+
+        r2v_id = str(next_id)
+        r2v_inputs = {
+            "clip": ["2", 0],
+            "vae": ["3", 0],
+            "audio_vae": ["4", 0],
+            "prompt": prompt,
+            "width": width,
+            "height": height,
+            "length": aligned_length,
+            "ref_image_size": ref_image_size,
+        }
+        for i, img_nid in enumerate(load_image_ids):
+            r2v_inputs[f"ref_images.ref_image_{i}"] = [img_nid, 0]
+        wf[r2v_id] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": r2v_inputs}
+        next_id += 1
+
+        ks_id = str(next_id)
+        wf[ks_id] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "res_multistep"}}
+        next_id += 1
+
+        bs_id = str(next_id)
+        wf[bs_id] = {"class_type": "BasicScheduler", "inputs": {
+            "model": ["1", 0], "scheduler": "simple", "steps": steps, "denoise": 1.0,
+        }}
+        next_id += 1
+
+        rn_id = str(next_id)
+        wf[rn_id] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
+        next_id += 1
+
+        bg_id = str(next_id)
+        wf[bg_id] = {"class_type": "BasicGuider", "inputs": {
+            "model": ["1", 0], "conditioning": [r2v_id, 0],
+        }}
+        next_id += 1
+
+        sca_id = str(next_id)
+        wf[sca_id] = {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": [rn_id, 0], "guider": [bg_id, 0],
+            "sampler": [ks_id, 0], "sigmas": [bs_id, 0],
+            "latent_image": [r2v_id, 1],
+        }}
+        next_id += 1
+
+        vd_id = str(next_id)
+        wf[vd_id] = {"class_type": "VAEDecode", "inputs": {
+            "samples": [sca_id, 0], "vae": ["3", 0],
+        }}
+        next_id += 1
+
+        vda_id = str(next_id)
+        wf[vda_id] = {"class_type": "VAEDecodeAudio", "inputs": {
+            "samples": [sca_id, 0], "vae": ["4", 0],
+        }}
+        next_id += 1
+
+        cv_id = str(next_id)
+        wf[cv_id] = {"class_type": "CreateVideo", "inputs": {
+            "images": [vd_id, 0], "fps": 24, "audio": [vda_id, 0],
+        }}
+        next_id += 1
+
+        sv_id = str(next_id)
+        wf[sv_id] = {"class_type": "SaveVideo", "inputs": {
+            "video": [cv_id, 0],
+            "filename_prefix": filename_prefix,
+            "format": "mp4",
+            "codec": "auto",
+        }}
+
+        if not self.wait_ready(timeout=60):
+            raise RuntimeError('ComfyUI server not ready')
+
+        prompt_id = self.queue_prompt(wf)
+        outputs = self.wait_result(prompt_id, timeout=7200)
+
+        # SaveVideo outputs under "images" key (PreviewVideo reuses image UI channel)
+        video_info = outputs.get(sv_id, {}).get("images", [{}])[0]
+        filename = video_info.get("filename", "")
+        subfolder = video_info.get("subfolder", "")
+        file_type = video_info.get("type", "output")
+
+        if not filename:
+            raise RuntimeError(f'No video in outputs: {outputs}')
+
+        result = {
+            'prompt_id': prompt_id,
+            'seed': seed,
+            'params': {
+                'prompt': prompt,
+                'ref_image_paths': ref_image_paths,
+                'width': width,
+                'height': height,
+                'length': aligned_length,
+                'steps': steps,
+                'ref_image_size': ref_image_size,
+            },
+            'filename': filename,
+            'subfolder': subfolder,
+        }
+
+        if output_path:
+            self.download_file(filename, subfolder, file_type, output_path)
+            result['video_path'] = output_path
+
+        return result
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='ComfyUI Wan T2V client')

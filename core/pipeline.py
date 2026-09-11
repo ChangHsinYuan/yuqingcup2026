@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Vidance v1 流水线主控 — 角色一致性有声短片生成
+"""Vidance 流水线主控 — 角色一致性有声短片生成（内部模块）
+
+推荐使用统一入口: python core/vidance.py auto ...
 
 流程:
   concept → LLM编剧(含角色描述+camera角度) → 角色锚(FLUX生图→TripoSplat→3DGS)
   → 逐镜(FLUX背景→RenderSplat合成→Wan I2V + TTS + 抽帧) → 审片 → 合成
-
-用法:
-  python core/pipeline.py "一个穿红斗篷的少年在雪原上行走" --character "穿红色斗篷的短发少年"
-  python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" -o output/final.mp4
 """
 import json
 import os
@@ -24,9 +22,7 @@ from utils.tts import TTSClient
 from utils.comfy_api import ComfyClient
 from utils.splat_renderer import render_splat_at_angle, render_splat_angles
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
-from utils.rife import RIFEClient, extract_frame as rife_extract_frame, get_video_frame_count
-from utils.music import generate_bgm
-from utils.stt import transcribe_audio
+from core.postprocess import PostProcessor
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.json')
 
@@ -52,6 +48,7 @@ class Pipeline:
         self.bgm_config = self.config.get('bgm', {})
         self.stt_config = self.config.get('stt', {})
         self.max_retries = 2
+        self.post = PostProcessor(self.config, llm=self.llm)
 
     def run(self, concept: str, output_path: str = None,
             character_desc: str = None, voice: str = None,
@@ -178,7 +175,7 @@ class Pipeline:
         transition_clips = []
         if self.rife_config.get('enabled', False) and len(all_clips) >= 2:
             print(f'\n=== [4.5] RIFE 镜头间过渡 ===')
-            transition_clips = self._generate_transitions(all_clips, clips_dir, task_id)
+            transition_clips = self.post.generate_transitions(all_clips, clips_dir, task_id)
 
         # ── 5. 合成 ──
         print('\n=== [5] 合成 ===')
@@ -192,7 +189,7 @@ class Pipeline:
         lut_path = None
         if self.color_config.get('enabled', False) or lut_override:
             print(f'\n=== [5.5] 调色 ===')
-            lut_path = self._select_lut(concept, script, task_dir, lut_override)
+            lut_path = self.post.select_lut(concept, script, task_dir, lut_override)
             if lut_path:
                 print(f'  LUT: {os.path.basename(lut_path)}')
 
@@ -201,7 +198,7 @@ class Pipeline:
         if self.bgm_config.get('enabled', False) or bgm_override:
             print(f'\n=== [5.6] 配乐 ===')
             total_duration = audio_offset + 2.0
-            bgm_path = self._select_bgm(concept, script, task_dir, total_duration, bgm_override)
+            bgm_path = self.post.select_bgm(concept, script, task_dir, total_duration, bgm_override)
             if bgm_path:
                 print(f'  BGM: {os.path.basename(bgm_path)}')
 
@@ -224,14 +221,14 @@ class Pipeline:
         # ── 5.7 STT 字幕兜底 ──
         if self.stt_config.get('enabled', False) or use_stt:
             print(f'\n=== [5.7] STT 字幕对齐 ===')
-            stt_srt = self._run_stt_subtitles(output_path, task_dir)
+            stt_srt = self.post.run_stt(output_path, task_dir)
             if stt_srt:
                 srt_path = stt_srt
                 print(f'  STT SRT: {stt_srt}')
             else:
                 # STT 失败：fallback 烧录 TTS 字幕
                 print(f'  ⚠ STT 失败，回退烧录 TTS 字幕: {srt_path}')
-                self._burn_subtitles(output_path, srt_path)
+                self.post.burn_subtitles(output_path, srt_path)
 
         meta['output'] = output_path
         meta['srt'] = srt_path
@@ -584,220 +581,11 @@ class Pipeline:
         print(f'  [prefetch] done: {len(results)} shots')
         return results
 
-    def _select_lut(self, concept: str, script: dict, task_dir: str,
-                    override: str = None) -> str:
-        """选择调色 LUT 文件路径。
-
-        Args:
-            concept: 用户概念
-            script: 编剧脚本
-            override: 手动指定风格名（None 则 LLM 自动选择）
-
-        Returns:
-            LUT .cube 文件路径，或 None
-        """
-        lut_dir = self.color_config.get('lut_dir',
-                                         os.path.join(os.path.dirname(__file__), '..', 'utils', 'luts'))
-        styles = self.color_config.get('styles', ['cinematic'])
-
-        if override:
-            style = override
-        else:
-            try:
-                style = self.llm.select_lut(concept, script, styles)
-            except Exception as e:
-                print(f'  ⚠ LUT selection failed: {e}, using default')
-                style = self.color_config.get('default_style', styles[0])
-
-        lut_path = os.path.join(lut_dir, f'{style}.cube')
-        if not os.path.isfile(lut_path):
-            print(f'  ⚠ LUT file not found: {lut_path}, skipping color grading')
-            return None
-
-        return lut_path
-
-    def _select_bgm(self, concept: str, script: dict, task_dir: str,
-                    duration: float, override: str = None) -> str:
-        """选择或生成配乐 BGM。
-
-        Args:
-            concept: 用户概念
-            script: 编剧脚本
-            task_dir: 任务目录（BGM 输出到此）
-            duration: BGM 时长（秒）
-            override: 手动指定 mood 名（None 则 LLM 自动选择）
-
-        Returns:
-            BGM wav 文件路径，或 None
-        """
-        moods = self.bgm_config.get('moods', ['calm'])
-
-        if override:
-            mood = override
-        else:
-            try:
-                mood = self.llm.select_bgm_mood(concept, script, moods)
-            except Exception as e:
-                print(f'  ⚠ BGM mood selection failed: {e}, using default')
-                mood = self.bgm_config.get('default_mood', moods[0])
-
-        # 优先使用自定义 BGM 目录
-        custom_dir = self.bgm_config.get('custom_dir', '')
-        if custom_dir and os.path.isdir(custom_dir):
-            custom_path = os.path.join(custom_dir, f'{mood}.wav')
-            if os.path.isfile(custom_path):
-                print(f'  [custom] using {custom_path}')
-                return custom_path
-
-        # 生成 BGM
-        bgm_path = os.path.join(task_dir, 'bgm.wav')
-        try:
-            generate_bgm(mood, duration, bgm_path)
-            print(f'  [generated] {mood}, {duration:.1f}s')
-            return bgm_path
-        except Exception as e:
-            print(f'  ⚠ BGM generation failed: {e}')
-            return None
-
-    def _burn_subtitles(self, video_path: str, srt_path: str) -> bool:
-        """将 SRT 字幕烧录进视频（就地替换）。返回 True 成功。"""
-        import subprocess
-        import shutil
-
-        if not srt_path or not os.path.isfile(srt_path):
-            return False
-
-        temp = video_path.replace('.mp4', '_resub.mp4')
-        shutil.move(video_path, temp)
-        ffmpeg = shutil.which('ffmpeg') or 'ffmpeg'
-        subtitle_filter = (
-            f"subtitles='{srt_path}':force_style='FontSize=24,"
-            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-            f"BorderStyle=1,Outline=2,Alignment=2'"
-        )
-        try:
-            subprocess.run(
-                [ffmpeg, '-y', '-i', temp, '-vf', subtitle_filter,
-                 '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
-                 '-pix_fmt', 'yuv420p',
-                 video_path],
-                capture_output=True, timeout=600,
-            )
-            os.remove(temp)
-            return os.path.isfile(video_path)
-        except Exception as e:
-            print(f'  ⚠ burn_subtitles failed: {e}')
-            if os.path.isfile(temp):
-                shutil.move(temp, video_path)
-            return False
-
-    def _run_stt_subtitles(self, video_path: str, task_dir: str) -> str:
-        """用 faster-whisper 对成片音频做 STT 转写，生成 STT 字幕 SRT。
-
-        Args:
-            video_path: 成片视频路径
-            task_dir: 任务目录
-
-        Returns:
-            STT SRT 文件路径，或 None
-        """
-        import subprocess
-        import shutil
-
-        # 提取成片音频
-        audio_path = os.path.join(task_dir, 'final_audio.wav')
-        try:
-            subprocess.run(
-                [shutil.which('ffmpeg') or 'ffmpeg', '-y', '-i', video_path,
-                 '-vn', '-ac', '1', '-ar', '16000', '-q:a', '2', audio_path],
-                capture_output=True, timeout=120,
-            )
-            if not os.path.isfile(audio_path):
-                print('  ⚠ STT: failed to extract audio')
-                return None
-        except Exception as e:
-            print(f'  ⚠ STT: audio extraction failed: {e}')
-            return None
-
-        # STT 转写
-        language = self.stt_config.get('language', 'zh')
-        try:
-            segments = transcribe_audio(audio_path, language=language, config=self.config)
-            print(f'  STT: {len(segments)} segments')
-            for s in segments[:3]:
-                print(f'    [{s["start"]:.2f}-{s["end"]:.2f}] {s["text"]}')
-            if len(segments) > 3:
-                print(f'    ... ({len(segments) - 3} more)')
-        except Exception as e:
-            print(f'  ⚠ STT: transcription failed: {e}')
-            return None
-
-        # 生成 SRT
-        srt_path = os.path.join(task_dir, 'subtitle_stt.srt')
-        from utils.ffmpeg_tools import generate_srt
-        generate_srt(segments, srt_path)
-
-        # 烧录 STT 字幕
-        if self._burn_subtitles(video_path, srt_path):
-            return srt_path
-        return None
-
-    def _generate_transitions(self, clips: list, clips_dir: str, task_id: str) -> list:
-        """生成镜头间 RIFE 过渡视频。
-
-        Args:
-            clips: 视频片段路径列表
-            clips_dir: 片段目录
-            task_id: 任务 ID
-
-        Returns:
-            过渡视频路径列表（长度 = len(clips) - 1）
-        """
-        model = self.rife_config.get('model', 'rife_v4.26.safetensors')
-        multiplier = self.rife_config.get('multiplier', 8)
-        fps = self.rife_config.get('fps', 24)
-
-        try:
-            client = RIFEClient(config=self.config, instance='wan', model_name=model)
-        except Exception as e:
-            print(f'  ⚠ RIFE client init failed: {e}, skipping transitions')
-            return []
-
-        transitions = []
-        trans_dir = os.path.join(clips_dir, 'transitions')
-        os.makedirs(trans_dir, exist_ok=True)
-
-        for i in range(len(clips) - 1):
-            clip_a = clips[i]
-            clip_b = clips[i + 1]
-            print(f'  transition {i+1}→{i+2}: ...', end=' ', flush=True)
-
-            try:
-                n_a = get_video_frame_count(clip_a)
-                n_b = get_video_frame_count(clip_b)
-                frame_a = os.path.join(trans_dir, f'trans_{i}_frameA.png')
-                frame_b = os.path.join(trans_dir, f'trans_{i}_frameB.png')
-                rife_extract_frame(clip_a, max(0, n_a - 1), frame_a)
-                rife_extract_frame(clip_b, 0, frame_b)
-
-                output = os.path.join(trans_dir, f'trans_{i}.mp4')
-                result = client.interpolate_transition(
-                    frame_a, frame_b, output,
-                    multiplier=multiplier, fps=fps,
-                    filename_prefix=f'vidance/{task_id}/trans_{i}',
-                )
-                print(f'{result["frame_count"]} frames')
-                transitions.append(output)
-            except Exception as e:
-                print(f'failed: {e}')
-                transitions.append(None)
-
-        return transitions
-
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Vidance v1 pipeline')
+    print('提示: 推荐使用统一入口 → python core/vidance.py auto ...\n')
+    parser = argparse.ArgumentParser(description='Vidance pipeline (内部入口，推荐使用 core/vidance.py)')
     parser.add_argument('concept', help='Video concept in Chinese')
     parser.add_argument('-o', '--output', default=None, help='Output video path')
     parser.add_argument('--character', default=None,
