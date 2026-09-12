@@ -12,6 +12,7 @@
   "comfyui": {
     "wan": {"host": "127.0.0.1", "port": 8189},
     "hunyuan": {"host": "127.0.0.1", "port": 8190},
+    "hunyuan3d": {"host": "127.0.0.1", "port": 8193},
     "sdxl": {"host": "127.0.0.1", "port": 8191},
     "flux": {"host": "127.0.0.1", "port": 8192},
     "triposplat": {"host": "127.0.0.1", "port": 8192},

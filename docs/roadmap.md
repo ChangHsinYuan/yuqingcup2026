@@ -25,7 +25,7 @@
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  产品层   v0 ✅ 有声短片 → v1 ✅ 角色一致性 → v2 ✅ 长视频       │
-│         v3 📐 2D→3D→新视角(⚠️阻塞) → v4 📐 营销号流水线    │
+│         v3 🚧 2D→3D→新视角(M0+M1+M2+M3+M4完成) → v4 📐 营销号流水线  │
 ├──────────────────────────────────────────────────────────┤
 │  编排层   opencode agent runtime                          │
 │           director + subagents(reviewer) + skills         │
@@ -54,14 +54,16 @@
 | **Wan2.2-TI2V-5B** | T2V + I2V | GPU2 | 8189 | 18G | `wan2.2_ti2v_5B_fp16`(9.4G) + `umt5_xxl_fp8`(6.3G) + `wan2.2_vae`(1.4G) | 17G | 运行中 |
 | **MiniMax-H3 ref2va** | 参考图→视频+原生音频 | GPU0 | 8188 | 46G | `minimax_h3_ref2va_int8`(20G) + `qwen3vl_32b_int8`(26G) + `video_vae_fp16`(4.9G) + `audio_vae_fp32`(578M) | 70G | **运行中（custom 主力）** |
 | **HunyuanVideo 13B** | T2V | GPU3 | 8190 | 20G | `hunyuan_video_t2v_720p_bf16`(24G) + `llava_llama3_fp8`(8.5G) + `clip_l`(235M) + `vae`(471M) | 34G | 运行中 |
-| **SDXL Base 1.0** | T2I | GPU1 | 8191 | 7G | `sd_xl_base_1.0.safetensors`(6.5G) | 6.5G | 运行中 |
+| **SDXL Base 1.0** | T2I | — | 8191 | — | `sd_xl_base_1.0.safetensors`(6.5G) | 6.5G | **已停** |
 | **FLUX.1-dev fp8** | T2I | GPU0 | 8192 | — | `flux1-dev-fp8`(12G) + `t5xxl_fp8`(4.6G) + `ae`(320M) | 16G | **已停** |
 | **TripoSplat** | 单图→3DGS | GPU0 | 8192 | ~4G | `triposplat_fp16`(707M) + `dino_v3_vit_h`(1.6G) + `vae_decoder`(550M) + `flux2-vae`(321M) + `birefnet`(424M) | 3.6G | 随 FLUX |
+| **Hunyuan3Dv2 turbo** | 图→mesh 重建 | GPU1 | 8193 | ~15G | `hunyuan3d-dit-v2-0-turbo.fp16`(4.6G) + `hunyuan3d-vae-v2-0.fp16`(409M) + `hunyuan3d_dinov2_giant`(2.27G) | 7.3G | **运行中（v3 M1+M2）** |
 | **MiniMax-H3 fl2va** | 纯文本→视频 | GPU0 | 8188 | — | `minimax_h3_fl2va_pruned_int8`(20G) | 20G | 备用（同实例） |
 
 - Wan T2V/I2V：auto/quick 模式主力，1280×704@24fps
 - H3 ref2va：custom 模式主力，1344×768@24fps + 原生音频，Qwen3-VL-32B 文本编码器原生支持中文
 - H3 prompt 用 `<Picture i>` 标签引用参考图，ref_image_size: match(快)/max(2048px 高保真)
+- Hunyuan3Dv2：v3 3D 重建引擎，4步一致性蒸馏 ~61s，独立 GPU1:8193（不再与 Wan 共实例）
 - HunyuanVideo/SDXL：备选引擎，目前未接入流水线
 - FLUX 已停（8192 端口无进程），TripoSplat 随 FLUX 共实例；auto 模式 flux 角色锚需重新启动 8192
 - 每镜随机 seed（防 ComfyUI 缓存命中）
@@ -113,7 +115,6 @@
 
 | 组件 | 能力 | 需要版本 | 说明 |
 |------|------|---------|------|
-| **Hunyuan3Dv2** | 图→mesh 重建 | v3 | 高质量资产导出，headless 渲染需 Isaac Sim/Blender |
 | **爬虫库** | bs4/lxml/yt-dlp/feedparser | v4 | 爬热点/参考图/人声 |
 
 ---
@@ -238,7 +239,7 @@
 
 **涉及文件**：`vidance.py`（concat 子命令 + --duration/--slowmo）、`pipeline.py`（slowmo 接线 + transition_types）、`postprocess.py`（generate_transitions transition_types）、`ffmpeg_tools.py`（compose 混合过渡）、`llm.py`（script_write target_duration + slowmo/transition_out schema）
 
-### v3 — 2D→3D→新视角（📐 设计完成，⚠️ 有阻塞）
+### v3 — 2D→3D→新视角（🚧 M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 待开始）
 
 **目标**：从 2D 内容重建 3D，生成原视角没有的新角度视频。
 
@@ -247,11 +248,30 @@
   → [I2V 生成动态] → [拼接]
 ```
 
-**新增依赖**：Hunyuan3D 模型、headless mesh 渲染器（待定：Isaac Sim / Blender / trimesh+pyrender）
+**新增依赖**：Hunyuan3D 模型 ✅、headless mesh 渲染器 trimesh+pyrender+EGL ✅
 
-**已知阻塞**：Hunyuan3D 出 mesh 生成可 headless，但 ComfyUI 的 mesh 渲染节点依赖浏览器 WebGL，无法 API 调用。需在 v3 启动前确定 headless 渲染方案。
+**进度**：
+- **M0 headless 渲染验证** ✅：trimesh 5.1.0 + pyrender 0.1.45 + PyOpenGL 3.1.0 + EGL 后端，box/icosphere GLB 渲染成功
+- **M1 Hunyuan3Dv2 mesh 重建** ✅：DiT turbo 模型 + VAE + DINOv2-giant 提取，ComfyUI single-image workflow 验证通过（doubao.jpg → 257K vertices GLB，~61s，9.7MB）
+- **M2 multiview workflow** ✅：3 视角（front/left/back）裁剪自三视图 + multiview workflow 验证通过（→206K verts GLB，~22s warm，8.41MB），质量对比优于单图（aspect 1.02→1.69，主连通分量 38%→63%）
+- **M3 mesh_render 封装** ✅：`utils/mesh_render.py`（260行），3 层 API（render_mesh_view/at_angle/angles），3-point lighting + depth-based alpha + 背景合成，与 splat_renderer API 对齐便于 pipeline 切换，8 项测试全通过（832×480 渲染 0.79s/张，512×512 0.43s/张）
+- **M4 场景锚** ✅：FLUX→Hunyuan3Dv2→mesh_render 全链路验证（2 场景：隔离木屋 238K verts + 雪原环境 411K verts，8 角度渲染一致性确认）
+- **M5 角色双路径** ✅：`--character-mode mesh` 接入 pipeline，`utils/hunyuan3d.py` 客户端（单图+多视角→GLB），pipeline mesh 分支（_build_character_anchor + _generate_scene_ref），doubao.jpg→282K verts GLB 28.8s + 4 角度预览 + 合成参考帧验证通过
+- **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
+- **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX→Hunyuan3Dv2→mesh_render→Wan I2V→RIFE→LUT→BGM→合成），3 镜 10.1s 成片，Shot 3 审查 retry 机制验证有效，资产入库阈值 score≥7 工作正常
+- M8: 场景一致性长片验证
 
-**详细设计**：见 [v3-design.md](./v3-design.md)（📐 设计完成，⚠️ headless 渲染阻塞待解）
+**模型**：
+
+| 模型 | 能力 | 位置 | 大小 | GPU | 端口 |
+|------|------|------|------|------|------|
+| Hunyuan3D-DiT-v2-0-turbo | 图→mesh（4步一致性蒸馏） | `ComfyUI/models/diffusion_models/` | 4.6G | GPU1 | 8193 |
+| Hunyuan3D-VAE-v2-0 | mesh VAE 解码 | `ComfyUI/models/vae/` | 409M | 同上 | 同上 |
+| DINOv2-giant | 图像编码器（从 DiT 提取） | `ComfyUI/models/clip_vision/` | 2.27G | 同上 | 同上 |
+
+> turbo 模型 4 步采样 ~61s/图（vs 标准 50 步 ~10min），DINOv2-giant 从 DiT checkpoint 提取（prefix `conditioner.main_image_encoder.model.`）
+
+**详细设计**：见 [v3-design.md](./v3-design.md)（M0+M1+M2+M3+M4+M5+M6+M7 完成，角色双路径+资产库+端到端打通）
 
 ### v4 — 营销号流水线（📐 设计完成）
 
@@ -273,16 +293,19 @@
 
 | GPU | 显存 | 实例 | 端口 | 状态 |
 |-----|------|------|------|------|
-| GPU0 | 48G | MiniMax-H3 ref2va | 8188 | 运行中（custom 主力） |
-| GPU1 | 48G | SDXL Base 1.0 | 8191 | 运行中（+ Isaac Sim + aluupy 训练） |
-| GPU2 | 48G | Wan2.2-5B + CosyVoice 2 + RIFE | 8189 / 9880 | 运行中（+ aluupy 训练） |
+| GPU0 | 48G | MiniMax-H3 ref2va | 8188 | 运行中（custom 主力，46G 按需加载） |
+| GPU1 | 48G | Hunyuan3Dv2 turbo | 8193 | 运行中（v3 3D 重建，~15G 按需加载 + aluupy 训练） |
+| GPU2 | 48G | Wan2.2-5B + RIFE + CosyVoice 2 | 8189 / 9880 | 运行中（+ aluupy 训练） |
 | GPU3 | 48G | HunyuanVideo 13B | 8190 | 运行中（+ aluupy 训练） |
 
 - **FLUX.1-dev fp8 (8192) 已停**：auto 模式 `--character-mode flux` 需先重启 8192（TripoSplat 随 FLUX 共实例）
+- **SDXL (8191) 已停**：未接入流水线，需要时重启
+- **Hunyuan3Dv2 独立 GPU1:8193**：不再与 Wan 共实例，3D 重建与视频生成可并行
 - CosyVoice 放 GPU2（与 Wan 共享，流水线串行不抢资源）
 - edge-tts 在线引擎不占 GPU（CPU + 网络）
 - faster-whisper STT 按需加载，共享 GPU 显存（不独立常驻）
 - aluupy 在 GPU1/2/3 有训练任务，不能动
+- ⚠️ ComfyUI 启动不能加 `--cuda-device`，否则覆盖 `CUDA_VISIBLE_DEVICES`（main.py:87）
 
 ---
 
@@ -359,7 +382,7 @@ vidance/
 │   ├── v2-design.md           # v2 长视频+完整后期设计（✅ 已完成）
 │   ├── v2.5-design.md         # v2.5 多入口架构+H3引擎接入（✅ 已完成）
 │   ├── deployed-models.md     # 已部署模型清单
-│   ├── v3-design.md           # v3 2D→3D→新视角设计（📐 设计完成，⚠️ 阻塞）
+│   ├── v3-design.md           # v3 2D→3D→新视角设计（🚧 M0-M7 完成，M8 待开始）
 │   ├── v4-design.md           # v4 营销号流水线设计（📐 设计完成）
 │   ├── hierachy.md
 │   ├── tech.md
@@ -388,5 +411,6 @@ vidance/
 - `HunyuanVideo-部署记录.md` — HunyuanVideo 13B + LLaVA-Llama3 + CLIP-L + VAE
 - `SDXL-部署记录.md` — SDXL Base 1.0
 - `FLUX-部署记录.md` — FLUX.1-dev fp8 + T5-XXL + VAE（含 TripoSplat 共实例配置）
+- **Hunyuan3Dv2** — 无独立记录，M1 验证过程见 v3-design.md §13。DiT turbo(4.6G) + VAE(409M) + DINOv2-giant(2.27G, 从 DiT 提取)，独立 GPU1:8193 实例
 
 > 模型文件统一存 `/mnt/dataset/zxy/<Model>-ComfyUI/`（mergerFS 机械盘），通过 `extra_model_paths.yaml` 映射到 ComfyUI。

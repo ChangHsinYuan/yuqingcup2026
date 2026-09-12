@@ -752,10 +752,10 @@ python utils/tts.py "中文旁白" -v edge-moe -o /tmp/test.wav
 |------|---------|---------|---------|
 | v1 | 角色一致性：FLUX 生角色→TripoSplat 出 3DGS→RenderSplat 渲染各角度参考帧→Wan I2V | TripoSplat 模型、RenderSplat | [v1-design.md](./v1-design.md) |
 | v2 | 长视频：RIFE 光流插帧软过渡 + ffmpeg 调色/配乐 + STT 字幕备选 + 镜头并行 + MiniMax-H3 评估 | RIFE 模型、ffmpeg 滤镜、faster-whisper | [v2-design.md](./v2-design.md) |
-| v3 | 2D→3D→新视角：Hunyuan3D mesh 重建 + headless 渲染器 + 资产库 | Hunyuan3D 模型、mesh 渲染方案（trimesh+pyrender / Blender 待验证） | [v3-design.md](./v3-design.md) |
+| v3 | 2D→3D→新视角：Hunyuan3D mesh 重建 + headless 渲染器 + 资产库 | Hunyuan3D 模型、pyrender+EGL headless 渲染（✅ M0-M7 已验证） | [v3-design.md](./v3-design.md) |
 | v4 | 营销号流水线：爬热点→选题→批量生成→发布 + 异步任务制 + 声音克隆生产化 + FunClip | 爬虫库、任务队列、发布 API | [v4-design.md](./v4-design.md) |
 
-> v3 的 mesh headless 渲染是已知阻塞点，需在 v3 启动前确定渲染方案。v1 用 3DGS 路径规避此问题（RenderSplat 全程 headless）。
+> v3 headless 渲染阻塞已解决（M0 pyrender+EGL 验证通过），M1 单图→mesh + M2 多视角→mesh 均验证完成，M3 mesh_render.py 封装完成，M4 场景锚全链路（FLUX→Hunyuan3Dv2→mesh_render）验证通过。
 
 ---
 

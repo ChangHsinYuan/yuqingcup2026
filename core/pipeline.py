@@ -4,8 +4,8 @@
 推荐使用统一入口: python core/vidance.py auto ...
 
 流程:
-  concept → LLM编剧(含角色描述+camera角度) → 角色锚(FLUX生图→TripoSplat→3DGS)
-  → 逐镜(FLUX背景→RenderSplat合成→Wan I2V + TTS + 抽帧) → 审片 → 合成
+  concept → LLM编剧(含角色描述+camera角度) → 角色锚(FLUX生图→TripoSplat→3DGS / Hunyuan3Dv2→mesh)
+  → 逐镜(FLUX背景→RenderSplat/mesh_render合成→Wan I2V + TTS + 抽帧) → 审片 → 合成
 """
 import json
 import os
@@ -21,6 +21,9 @@ from utils.llm import LLMClient
 from utils.tts import TTSClient
 from utils.comfy_api import ComfyClient
 from utils.splat_renderer import render_splat_at_angle, render_splat_angles
+from utils.mesh_render import render_mesh_at_angle, render_mesh_angles
+from utils.hunyuan3d import Hunyuan3DClient
+from utils.asset_registry import AssetRegistry
 from utils.ffmpeg_tools import extract_frames, generate_srt, compose
 from utils.rife import RIFEClient
 from core.postprocess import PostProcessor
@@ -40,6 +43,8 @@ class Pipeline:
         self.tts = TTSClient(self.config)
         self.wan = ComfyClient(config=self.config, instance='wan')
         self.flux = ComfyClient(config=self.config, instance='flux')
+        self.hunyuan3d = Hunyuan3DClient(config=self.config)
+        self.assets = AssetRegistry(self.config)
         self.output_dir = self.config['output_dir']
         self.wan_defaults = self.config.get('wan_defaults', {})
         self.i2v_defaults = self.config.get('i2v_defaults', {})
@@ -65,16 +70,19 @@ class Pipeline:
             character_mode: str = 'auto', lut_override: str = None,
             bgm_override: str = None, use_stt: bool = False,
             target_duration: float = None,
-            slowmo_override: int = None) -> dict:
+            slowmo_override: int = None,
+            no_asset_reuse: bool = False) -> dict:
         """端到端生成有声短片
 
         character_mode:
           'auto' — 先试 3DGS，审查不过自动降级 flux（默认）
           '3dgs' — 强制 3DGS 角色锚（FLUX→TripoSplat→3DGS→RenderSplat→I2V）
+          'mesh' — 强制 mesh 角色锚（FLUX→Hunyuan3Dv2→GLB→mesh_render→I2V）
           'flux' — 每镜 FLUX 直接生成角色+场景图做 I2V 参考（不重建 3D）
           不传 character_desc 时走 v0 纯 T2V
         target_duration: 目标总时长（秒），None 时默认 2-5 镜短片
         slowmo_override: 全局慢动作帧倍率，覆盖所有镜头（None 则用 LLM 标注）
+        no_asset_reuse: True 时跳过资产库检索，强制重新重建 3D 资产
         """
         task_id = time.strftime('%Y%m%d_%H%M%S')
         task_dir = os.path.join(self.output_dir, task_id)
@@ -138,18 +146,20 @@ class Pipeline:
         if character_prompt:
             print(f'\n=== [3] 角色锚阶段 (mode={character_mode}) ===')
             character = self._build_character_anchor(
-                character_prompt, char_dir, task_id, character_mode
+                character_prompt, char_dir, task_id, character_mode,
+                character_desc=character_desc,
+                no_asset_reuse=no_asset_reuse,
             )
             character['desc'] = character_desc
             meta['character'] = character
 
-            if character['mode'] == '3dgs' and not character.get('review', {}).get('pass', False):
+            if character['mode'] in ('3dgs', 'mesh') and not character.get('review', {}).get('pass', False):
                 if character_mode == 'auto':
-                    print(f'  ⚠ 3DGS 审查未通过 (score={character["review"]["score"]})，自动降级 flux 模式')
+                    print(f'  ⚠ {character["mode"].upper()} 审查未通过 (score={character["review"]["score"]})，自动降级 flux 模式')
                     character['mode'] = 'flux'
                     meta['character_mode'] = 'flux (auto-downgraded)'
                 else:
-                    print(f'  ⚠ 3DGS 审查未通过 (score={character["review"]["score"]})，继续 3dgs 模式')
+                    print(f'  ⚠ {character["mode"].upper()} 审查未通过 (score={character["review"]["score"]})，继续 {character["mode"]} 模式')
 
         # ── 4. 逐镜生成 ──
         all_clips = []
@@ -286,12 +296,55 @@ class Pipeline:
             return self._default_review(score=7, feedback=f'Review error: {e}')
 
     def _build_character_anchor(self, character_prompt: str, char_dir: str,
-                                task_id: str, mode: str = 'auto') -> dict:
+                                task_id: str, mode: str = 'auto',
+                                character_desc: str = None,
+                                no_asset_reuse: bool = False) -> dict:
         """角色锚阶段
 
         mode='flux': 只生成 FLUX 角色参考图（不重建 3D）
         mode='3dgs'/'auto': FLUX生图 → TripoSplat→3DGS → 多角度预览审查
+        mode='mesh': FLUX生图 → Hunyuan3Dv2→GLB → mesh_render 多角度预览审查
+
+        资产复用：若 mode 为 mesh/3dgs 且资产库有匹配角色（quality_score≥7），跳过重建。
+        no_asset_reuse=True 时跳过资产库检索。
         """
+        # [3-pre] 资产库检索
+        if not no_asset_reuse and mode in ('mesh', '3dgs') and character_desc:
+            path_filter = 'mesh' if mode == 'mesh' else '3dgs'
+            match = self.assets.find_character(character_desc, min_similarity=0.6,
+                                               path_filter=path_filter)
+            if match and match.get('quality_score', 0) >= 7:
+                print(f'  [3-pre] 资产库命中: {match["id"]} (score={match["quality_score"]})')
+                glb = match.get('glb')
+                splat = match.get('splat')
+                ref = match.get('ref_image')
+                if mode == 'mesh' and glb and os.path.exists(glb):
+                    preview_dir = os.path.join(char_dir, 'previews')
+                    preview_paths = render_mesh_angles(
+                        glb, angles=4, output_dir=preview_dir,
+                        size=512, pitch=15.0, texture_image=ref,
+                    )
+                    return {
+                        'ref_image': ref, 'glb_path': glb,
+                        'preview_angles': preview_paths,
+                        'review': {'score': match['quality_score'], 'pass': True,
+                                   'feedback': f'Reused asset: {match["id"]}'},
+                        'mode': 'mesh', 'asset_id': match['id'],
+                    }
+                elif mode == '3dgs' and splat and os.path.exists(splat):
+                    preview_dir = os.path.join(char_dir, 'previews')
+                    preview_paths = render_splat_angles(
+                        splat, angles=4, output_dir=preview_dir,
+                        size=512, pitch=15.0,
+                    )
+                    return {
+                        'ref_image': ref, 'ply_path': splat,
+                        'preview_angles': preview_paths,
+                        'review': {'score': match['quality_score'], 'pass': True,
+                                   'feedback': f'Reused asset: {match["id"]}'},
+                        'mode': '3dgs', 'asset_id': match['id'],
+                    }
+
         # [3a] FLUX 生成角色参考图
         print('  [3a] FLUX 生成角色参考图...')
         ref_path = os.path.join(char_dir, 'character_ref.png')
@@ -311,6 +364,69 @@ class Pipeline:
                 'ref_image': ref_path,
                 'mode': 'flux',
                 'review': {'score': 10, 'pass': True, 'feedback': 'flux mode, no 3DGS'},
+            }
+
+        if mode == 'mesh':
+            # [3b-mesh] FLUX 生成三视图 → Hunyuan3Dv2 multiview → GLB mesh
+            print('  [3b] FLUX 三视图 + Hunyuan3Dv2 multiview → GLB...')
+            view_prompts = self.llm.optimize_character_multiview_prompts(character_desc)
+            view_paths = {}
+            for view_name in ('front', 'left', 'back'):
+                vp = os.path.join(char_dir, f'character_{view_name}.png')
+                self.flux.generate_flux_t2i(
+                    prompt=view_prompts[view_name],
+                    width=char_size, height=char_size,
+                    steps=self.flux_defaults.get('steps', 20),
+                    guidance=self.flux_defaults.get('guidance', 3.5),
+                    filename_prefix=f'{task_id}/character_{view_name}',
+                    output_path=vp,
+                )
+                view_paths[view_name] = vp
+                print(f'    {view_name}: {vp}')
+
+            glb_path = os.path.join(char_dir, 'character.glb')
+            self.hunyuan3d.generate_multiview(
+                front_path=view_paths['front'],
+                left_path=view_paths['left'],
+                back_path=view_paths['back'],
+                filename_prefix=f'{task_id}/character_mesh',
+                output_path=glb_path,
+            )
+            print(f'  glb: {glb_path}')
+
+            # [3c-mesh] mesh_render 多角度预览审查
+            print('  [3c] 渲染多角度预览...')
+            preview_dir = os.path.join(char_dir, 'previews')
+            preview_paths = render_mesh_angles(
+                glb_path, angles=4, output_dir=preview_dir,
+                size=512, pitch=15.0, texture_image=ref_path,
+            )
+            print(f'  previews: {len(preview_paths)} angles')
+
+            review = self._safe_review_character(ref_path, preview_paths)
+            print(f'  review: score={review["score"]}, pass={review["pass"]}')
+            if not review['pass']:
+                print(f'    feedback: {review["feedback"][:80]}')
+
+            # [3d-mesh] 资产入库
+            if character_desc and review['score'] >= 7:
+                asset_id = character_desc[:20].replace(' ', '_')
+                try:
+                    self.assets.register_character(
+                        id=asset_id, desc=character_desc, path='mesh',
+                        glb_path=glb_path, ref_image=ref_path,
+                        quality_score=review['score'],
+                    )
+                    print(f'  [3d] 资产入库: {asset_id}')
+                except Exception as e:
+                    print(f'  [3d] 资产入库失败: {e}')
+
+            return {
+                'ref_image': ref_path,
+                'glb_path': glb_path,
+                'preview_angles': preview_paths,
+                'review': review,
+                'mode': 'mesh',
             }
 
         # [3b] TripoSplat 单图 → 3DGS (.ply)
@@ -337,6 +453,19 @@ class Pipeline:
         if not review['pass']:
             print(f'    feedback: {review["feedback"][:80]}')
 
+        # [3d-3dgs] 资产入库
+        if character_desc and review['score'] >= 7:
+            asset_id = character_desc[:20].replace(' ', '_')
+            try:
+                self.assets.register_character(
+                    id=asset_id, desc=character_desc, path='3dgs',
+                    splat_path=ply_path, ref_image=ref_path,
+                    quality_score=review['score'],
+                )
+                print(f'  [3d] 资产入库: {asset_id}')
+            except Exception as e:
+                print(f'  [3d] 资产入库失败: {e}')
+
         return {
             'ref_image': ref_path,
             'ply_path': ply_path,
@@ -348,7 +477,7 @@ class Pipeline:
     def _generate_scene_ref(self, shot: dict, character: dict, clips_dir: str,
                             task_id: str, i2v_w: int, i2v_h: int,
                             bg_w: int, bg_h: int) -> str:
-        """生成镜头参考帧（FLUX 场景图 或 3DGS 合成图）。可并行调用。"""
+        """生成镜头参考帧（FLUX 场景图 / 3DGS 合成图 / mesh 合成图）。可并行调用。"""
         sid = shot['id']
         camera = shot.get('camera', {})
         yaw = camera.get('yaw', 0)
@@ -357,6 +486,7 @@ class Pipeline:
 
         char_mode = character.get('mode', '3dgs')
         use_flux_ref = (char_mode == 'flux')
+        use_mesh_ref = (char_mode == 'mesh')
 
         if use_flux_ref:
             scene_prompt = self.llm.optimize_scene_prompt(
@@ -386,15 +516,27 @@ class Pipeline:
                 output_path=bg_path,
             )
             composite_ref = os.path.join(clips_dir, f'composite_ref_{sid}.png')
-            render_splat_at_angle(
-                ply_path=character['ply_path'],
-                yaw=yaw, pitch=pitch,
-                output_path=composite_ref,
-                bg_image=bg_path,
-                width=i2v_w, height=i2v_h,
-                fov=fov,
-            )
-            print(f'  [prefetch] composite_ref (3dgs, yaw={yaw}): {sid}')
+            if use_mesh_ref:
+                render_mesh_at_angle(
+                    glb_path=character['glb_path'],
+                    yaw=yaw, pitch=pitch,
+                    output_path=composite_ref,
+                    bg_image=bg_path,
+                    width=i2v_w, height=i2v_h,
+                    fov=fov,
+                    texture_image=character.get('ref_image'),
+                )
+                print(f'  [prefetch] composite_ref (mesh, yaw={yaw}): {sid}')
+            else:
+                render_splat_at_angle(
+                    ply_path=character['ply_path'],
+                    yaw=yaw, pitch=pitch,
+                    output_path=composite_ref,
+                    bg_image=bg_path,
+                    width=i2v_w, height=i2v_h,
+                    fov=fov,
+                )
+                print(f'  [prefetch] composite_ref (3dgs, yaw={yaw}): {sid}')
             return composite_ref
 
     def _generate_tts(self, shot: dict, clips_dir: str, voice: str) -> dict:
@@ -635,8 +777,8 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', default=None, help='Output video path')
     parser.add_argument('--character', default=None,
                         help='Character description in Chinese (e.g. 穿红斗篷的少年)')
-    parser.add_argument('--character-mode', default='auto', choices=['auto', '3dgs', 'flux'],
-                        help='Character anchor mode: auto(3DGS→flux降级) / 3dgs / flux (default: auto)')
+    parser.add_argument('--character-mode', default='auto', choices=['auto', '3dgs', 'mesh', 'flux'],
+                        help='Character anchor mode: auto(3DGS→flux降级) / 3dgs / mesh(Hunyuan3Dv2) / flux (default: auto)')
     parser.add_argument('--voice', default=None,
                         help='TTS voice (e.g. edge-moe, cosy-default)')
     parser.add_argument('--no-rife', action='store_true',

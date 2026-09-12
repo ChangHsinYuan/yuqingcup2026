@@ -8,7 +8,7 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成**（2026-09-09），详见 [docs/v2-design.md](./docs/v2-design.md)。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 M0+M1+M2+M3+M4+M5+M6+M7 完成**（2026-09-12）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -19,9 +19,22 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M4 配乐 ducking**：5 种 BGM（calm/uplifting/mysterious/dramatic/playful），纯 numpy 合成，sidechaincompress ducking
 - **M5 faster-whisper STT**：large-v3-turbo 模型，成片音频转写→SRT→重新烧录字幕
 
+**v2.1 backlog**（全部完成）：
+- `--duration N` 动态镜头数 + `--slowmo N` 全局慢动作 + per-shot `transition_out` + `concat` 子命令
+
+**v3 2D→3D→新视角**（M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 待开始）：
+- **M0 headless 渲染** ✅：trimesh 5.1.0 + pyrender 0.1.45 + EGL 后端，4×4090 headless 渲染 GLB→IMAGE 成功
+- **M1 Hunyuan3Dv2 mesh 重建** ✅：DiT turbo（4步,~61s）+ VAE + DINOv2-giant，doubao.jpg→257K verts GLB，pyrender 4 角度预览通过
+- **M2 multiview** ✅：3 视角（front/left/back）裁剪自 doubao.jpg 三视图 → 206K verts GLB（~22s warm），aspect 1.69 vs 单图 1.02，主连通分量 63% vs 38%，多视角显著优于单图
+- **M3 mesh_render 封装** ✅：`utils/mesh_render.py`（260行），3 层 API + 3-point lighting + depth-based alpha + 背景合成，与 splat_renderer API 对齐，8 项测试全通过（832×480 渲染 0.79s/张）
+- **M4 场景锚** ✅：FLUX→Hunyuan3Dv2→mesh_render 全链路验证，2 场景（隔离木屋 238K verts + 雪原环境 411K verts），8 角度渲染一致性确认
+- **M5 角色双路径** ✅：`--character-mode mesh` 接入 pipeline，`utils/hunyuan3d.py` 客户端（单图+多视角→GLB），`_build_character_anchor` + `_generate_scene_ref` mesh 分支，doubao.jpg→282K verts GLB 28.8s + 4 角度预览 + 合成参考帧验证通过
+- **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
+- **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX→Hunyuan3Dv2→mesh_render→Wan I2V→RIFE→LUT→BGM→合成），3 镜 10.1s 成片 `output/20260912_134303/final.mp4`，Shot 3 审查 retry 机制验证有效，可视化 `m7_results.html`
+
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
-- **character-mode 开关**：`auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `flux`（每镜 FLUX 直接生成角色+场景图，不重建 3D）
+- **character-mode 开关**：`auto`（默认，3DGS 审查不过自动降级 flux）/ `3dgs` / `mesh`（Hunyuan3Dv2→GLB→mesh_render）/ `flux`（每镜 FLUX 直接生成角色+场景图，不重建 3D）
 - **3DGS 位姿修复**：PCA 自动对齐角色主轴到垂直 + 裁剪接地合成（脚踩地不悬浮）
 - **3DGS 渲染优化**：飞点过滤 + 超采样渲染 + 大高斯参数，表面更平滑噪声更少
 - **角色位姿修复**：FLUX 角色 prompt 强调 "standing upright on the ground"，审查加 pose 维度
@@ -50,19 +63,24 @@ vidance/
 │   ├── gen_luts.py            # v2 生成 3D LUT .cube 文件（6 种风格）
 │   ├── music.py               # v2 生成环境配乐 BGM（5 种风格，numpy 合成）
 │   ├── stt.py                 # v2 faster-whisper STT 转写（字幕兜底）
+│   ├── mesh_render.py         # v3 headless mesh 渲染器（pyrender+EGL，M3 已封装）
+│   ├── hunyuan3d.py           # v3 Hunyuan3Dv2 重建客户端（单图+多视角→GLB，M5 已封装）
+│   ├── asset_registry.py      # v3 资产库管理（CRUD+模糊搜索+CLI，M6 已封装）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
 │       ├── wan_i2v.json       # Wan I2V workflow 模板（12 节点，Wan22ImageToVideoLatent）
 │       ├── triposplat.json    # TripoSplat 单图→PLY workflow（13 节点）
 │       ├── flux_t2i.json      # FLUX T2I workflow 模板（10 节点）
-│       └── rife_transition.json  # v2 RIFE 插帧 workflow（7 节点）
+│       ├── rife_transition.json  # v2 RIFE 插帧 workflow（7 节点）
+│       ├── hunyuan3d_single.json  # v3 Hunyuan3Dv2 单图→mesh workflow（M1 验证）
+│       └── hunyuan3d_multiview.json  # v3 Hunyuan3Dv2 多视角→mesh workflow（M2 验证）
 ├── voices/                    # 自定义 CosyVoice 克隆音色素材目录
 ├── bgm/                       # v2 自定义 BGM 素材目录（放 {mood}.wav 自动使用）
 ├── .opencode/
-│   ├── agents/{director,reviewer}.md
+│   ├── agents/{director,reviewer,asset}.md
 │   └── skills/{scriptwriting,review}/SKILL.md
-├── docs/                      # 设计文档（roadmap + v0-design + v1-design）
+├── docs/                      # 设计文档（roadmap + v0-v4 design + deployed-models）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
 ```
@@ -122,7 +140,8 @@ python core/vidance.py concat clip1.mp4 clip2.mp4 -o merged.mp4 --transition cro
 | `videos` (位置参数) | — | — | — | ✓ | 待拼接视频文件列表 |
 | `-o/--output` | ✓ | ✓ | ✓ | ✓ | 输出路径（相对→output_dir） |
 | `--character` | ✓ | — | — | — | 角色描述（中文） |
-| `--character-mode` | ✓ | — | — | — | auto/3dgs/flux |
+| `--character-mode` | ✓ | — | — | — | auto/3dgs/mesh/flux |
+| `--no-asset-reuse` | ✓ | — | — | — | 禁用资产库复用 |
 | `--voice` | ✓ | — | ✓ | — | TTS 音色 |
 | `--duration` | ✓ | — | — | — | 目标总时长（秒），动态镜头数 |
 | `--slowmo` | ✓ | — | — | — | 全局慢动作倍率 |
@@ -181,14 +200,19 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | 服务 | 端口 | GPU | 环境 |
 |------|------|-----|------|
 | MiniMax-H3 ref2va (ComfyUI) | 8188 | GPU0 | comfyui |
-| Wan T2V/I2V (ComfyUI) | 8189 | GPU2 | comfyui |
+| Hunyuan3Dv2 turbo (ComfyUI) | 8193 | GPU1 | comfyui |
+| Wan T2V/I2V + RIFE (ComfyUI) | 8189 | GPU2 | comfyui |
 | HunyuanVideo (ComfyUI) | 8190 | GPU3 | comfyui |
-| SDXL (ComfyUI) | 8191 | GPU1 | comfyui |
-| FLUX + TripoSplat (ComfyUI) | 8192 | GPU0 | comfyui |
+| FLUX + TripoSplat (ComfyUI) | 8192 | — | comfyui |
+| SDXL (ComfyUI) | 8191 | — | comfyui |
 | TTS 双引擎 (edge-tts + CosyVoice) | 9880 | GPU2 | cosyvoice |
 
-> TripoSplat 与 FLUX 共用 GPU0:8192 同一 ComfyUI 实例（串行调用，不抢资源）。
-> H3 (8188) 独占 GPU0，用于 custom 模式参考图条件视频生成。
+> H3 (8188) 独占 GPU0，用于 custom 模式参考图条件视频生成。模型按需加载，首次 workflow 触发后占 ~46G。
+> Hunyuan3Dv2 (8193) 独占 GPU1，v3 3D 重建引擎。
+> Wan+RIFE (8189) 独占 GPU2，auto/quick 模式视频生成。
+> HunyuanVideo (8190) 独占 GPU3，T2V 备选。
+> FLUX(8192)/SDXL(8191) **已停**，需要时重启（FLUX 需找空卡或与 H3 互斥）。
+> ⚠️ ComfyUI 启动**不能加 `--cuda-device`**，否则会覆盖 `CUDA_VISIBLE_DEVICES` 环境变量（main.py:87 逻辑）。正确做法：`CUDA_VISIBLE_DEVICES=N python main.py --listen 127.0.0.1 --port XXXX`。
 
 ## 关键约定
 
@@ -198,10 +222,12 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 4. **审片阈值**：综合分 ≥7 通过，最多重试 2 次，取最高分兜底
 5. **时长对齐**：成片按配音时长为准，画面不足定格末帧
 6. **元数据完整**：每次任务记录 meta.json（脚本/prompt/seed/审片/时间戳）
-7. **角色锚流程**（v1.1）：`--character` 传入角色描述 → FLUX 生角色参考图 → 按 `--character-mode` 分流：
+7. **角色锚流程**（v1.1 + v3）：`--character` 传入角色描述 → FLUX 生角色参考图 → 按 `--character-mode` 分流：
    - `flux`：每镜 FLUX 直接生成角色+场景完整图 → Wan I2V（不重建 3D，质量最稳定）
    - `3dgs`：FLUX 图 → TripoSplat→3DGS → 每镜 RenderSplat 按角度渲染 → composite bg → Wan I2V（所有镜头强制 3DGS）
+   - `mesh`（v3）：FLUX 图 → Hunyuan3Dv2→GLB → 每镜 mesh_render 按角度渲染 → composite bg → Wan I2V（几何更准，可导出）
    - `auto`（默认）：先走 3DGS 流程 + review_character 审查，不过则自动降级 flux
+   - **资产复用**（v3 M6）：mesh/3dgs 模式重建前先查资产库（相似度≥0.6 + score≥7），命中则跳过重建直接渲染预览；重建后 review≥7 自动入库。`--no-asset-reuse` 可禁用
 8. **审片 5 维**（v1）：consistency/quality/motion/artifact/character_consistency，与角色参考图对比
 9. **审片图片缩放**：上传前 resize 到 768px + JPEG 85%（原始 832×480 太大导致 API 超时）
 10. **审片超时处理**：60s timeout + 1 retry，失败则 safe fallback auto-pass（不阻塞流水线）
@@ -214,10 +240,11 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 ## Python 环境
 
 - **主环境 (comfyui)**：`/home/zxy/.conda/envs/comfyui/bin/python`（torch 2.13+cu130）
-  - 用于：pipeline、comfy_api、llm、ffmpeg_tools、moviepy、rife、stt、music、gen_luts
+  - 用于：pipeline、comfy_api、llm、ffmpeg_tools、moviepy、rife、stt、music、gen_luts、**mesh_render（v3: trimesh+pyrender+EGL）**
 - **TTS 环境 (cosyvoice)**：`/home/zxy/.conda/envs/cosyvoice/bin/python`（torch 2.3.1+cu121）
   - 用于：tts_server（CosyVoice 推理）
 - **STT 模型**：`/mnt/dataset/zxy/hf_cache/hub/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/`（int8_float16 GPU，HF_HOME 指向 hf_cache）
+- **v3 headless 渲染依赖**（comfyui 环境）：trimesh 5.1.0 + pyrender 0.1.45 + PyOpenGL 3.1.0，EGL 后端（`PYOPENGL_PLATFORM=egl`）
 
 ## LLM 模型
 
@@ -227,7 +254,7 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 | claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
 | claude-sonnet-4-6 | 审片备选（review_strict，534s/镜太慢） |
 
-## 已知限制（v2）
+## 已知限制（v2 + v3）
 
 1. **3DGS 角色重建质量仍是瓶颈**（character_consistency 2-4/10）：
    - TripoSplat 262K 高斯渲染稀疏，像素覆盖 31-35%（v1.1 位姿修复后提升，原 13-26%）
@@ -254,3 +281,6 @@ python utils/ffmpeg_tools.py frames output/clips/shot_1.mp4 -n 4
 13. **music subagent 简化**（v2 偏差）：设计 §8.2 定义独立 music subagent，实际简化为 pipeline 内联 LLM 调用（`llm.select_bgm_mood()`），功能等价
 14. **~~无 `--duration` CLI~~ → 已实现**（v2.1）：`--duration` 已加入 auto 子命令
 15. **concat 子命令**（v2.1 新增）：`vidance.py concat` 支持多视频拼接（cut/rife/crossfade），可复用于已有素材合并
+16. **v3 M1 mesh 为 non-watertight**（v3）：Hunyuan3Dv2 turbo 输出 mesh 为 non-watertight（VoxelToMesh surface net 特性），不影响渲染但影响后续物理仿真/布尔运算。M2 多视角重建改善：主连通分量 38%→63%，bbox 比例更自然（aspect 1.02→1.69）
+17. **v3 pyrender 材质处理**（v3，✅ M3 已处理）：GLB 的 PBR 材质在 pyrender 可能部分丢失，M3 封装时已加 3-point lighting（key+fill+ambient）和 `gray_fallback` 选项（覆盖为灰色材质用于预览审查）
+18. **~~v3 Hunyuan3Dv2 与 Wan 共实例~~ → 已分离**（v3）：Hunyuan3Dv2 已独立到 GPU1:8193，不再与 Wan 共用 8189，3D 重建与视频生成可并行

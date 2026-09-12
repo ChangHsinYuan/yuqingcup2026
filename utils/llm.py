@@ -206,6 +206,40 @@ class LLMClient:
         ]
         return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
 
+    def optimize_character_multiview_prompts(self, character_desc: str) -> dict:
+        """中文角色描述→英文 FLUX 三视图 prompt（正面/侧面/背面）
+
+        Returns:
+            {'front': str, 'left': str, 'back': str}
+        """
+        system = (
+            '你是角色设计prompt优化器。将中文角色描述翻译为英文的FLUX image generation prompt，生成三个视角。\n'
+            '要求：\n'
+            '- 三个视角的角色必须是同一个人，外观完全一致（相同服装、发型、体型、配色）\n'
+            '- 保留角色所有外观细节（物种、毛色/肤色、服装、配饰、体型）\n'
+            '- 角色必须是自然站立姿态，绝不能躺倒或悬浮\n'
+            '- 固定后缀：standing upright on the ground, full body, plain white background, high detail, character reference sheet\n'
+            '- front view / left side view / back view 分别对应正面、左侧、背面\n'
+            '- 英文，每个prompt不超过80词\n'
+            '- 输出JSON格式：{"front": "...", "left": "...", "back": "..."}\n'
+            '- 不要加任何解释'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'角色描述：{character_desc}'},
+        ]
+        result = self.chat(messages, model=self.models['prompt_opt'], temperature=0.3)
+        import json
+        try:
+            return json.loads(result)
+        except Exception:
+            base = self.optimize_character_prompt(character_desc)
+            return {
+                'front': base,
+                'left': base.replace('front view', 'left side view'),
+                'back': base.replace('front view', 'back view'),
+            }
+
     def optimize_scene_prompt(self, character_desc: str, scene_desc: str,
                               style: str) -> str:
         """中文角色描述+场景描述→英文 FLUX 场景图 prompt（角色自然融入场景，站立姿态）"""

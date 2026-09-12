@@ -50,6 +50,7 @@ def cmd_auto(args):
         use_stt=args.stt,
         target_duration=args.duration,
         slowmo_override=args.slowmo,
+        no_asset_reuse=args.no_asset_reuse,
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -214,8 +215,10 @@ def build_parser():
     p_auto.add_argument('--character', default=None,
                         help='角色描述（中文，如：穿红斗篷的少年）')
     p_auto.add_argument('--character-mode', default='auto',
-                        choices=['auto', '3dgs', 'flux'],
-                        help='角色锚模式: auto(3DGS→flux降级) / 3dgs / flux (默认: auto)')
+                        choices=['auto', '3dgs', 'mesh', 'flux'],
+                        help='角色锚模式: auto(3DGS→flux降级) / 3dgs / mesh(Hunyuan3Dv2) / flux (默认: auto)')
+    p_auto.add_argument('--no-asset-reuse', action='store_true',
+                        help='禁用资产库复用，强制重新重建 3D 资产')
     p_auto.add_argument('--voice', default=None,
                         help='TTS 音色 (如 edge-moe, cosy-default)')
     p_auto.add_argument('--duration', type=float, default=None,

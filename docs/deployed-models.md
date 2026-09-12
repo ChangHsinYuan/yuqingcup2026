@@ -1,6 +1,6 @@
 # Vidance 已部署模型清单
 
-> 最后更新：2026-09-11
+> 最后更新：2026-09-12
 
 所有模型文件存 `/mnt/dataset/zxy/<Model>-ComfyUI/`（mergerFS 机械盘），通过 ComfyUI `extra_model_paths.yaml` 映射。代码/配置放 sdb 快盘，模型/产出放 mergerFS 机械盘。
 
@@ -14,9 +14,10 @@
 | **MiniMax-H3 ref2va** | 参考图→视频+原生音频 | 8188 | GPU0 | 46G | `minimax_h3_ref2va_int8`(20G) + `qwen3vl_32b_int8`(26G) + `video_vae_fp16`(4.9G) + `audio_vae_fp32`(578M) | 70G | **运行中（custom 主力）** |
 | **MiniMax-H3 fl2va** | 纯文本→视频 | 8188 | GPU0 | — | `minimax_h3_fl2va_pruned_int8`(20G) | 20G | 备用（同实例） |
 | **HunyuanVideo 13B** | T2V | 8190 | GPU3 | 20G | `hunyuan_video_t2v_720p_bf16`(24G) + `llava_llama3_fp8`(8.5G) + `clip_l`(235M) + `vae`(471M) | 34G | 运行中（未接入流水线） |
-| **SDXL Base 1.0** | T2I | 8191 | GPU1 | 7G | `sd_xl_base_1.0.safetensors`(6.5G) | 6.5G | 运行中（未接入流水线） |
+| **SDXL Base 1.0** | T2I | 8191 | — | — | `sd_xl_base_1.0.safetensors`(6.5G) | 6.5G | **已停** |
 | **FLUX.1-dev fp8** | T2I | 8192 | GPU0 | — | `flux1-dev-fp8`(12G) + `t5xxl_fp8`(4.6G) + `ae`(320M) | 16G | **已停** |
 | **TripoSplat** | 单图→3DGS | 8192 | GPU0 | ~4G | `triposplat_fp16`(707M) + `dino_v3_vit_h`(1.6G) + `vae_decoder`(550M) + `flux2-vae`(321M) + `birefnet`(424M) | 3.6G | 随 FLUX 共实例 |
+| **Hunyuan3Dv2 turbo** | 图→mesh 重建 | 8193 | GPU1 | ~15G | `hunyuan3d-dit-v2-0-turbo.fp16`(4.6G) + `hunyuan3d-vae-v2-0.fp16`(409M) + `hunyuan3d_dinov2_giant`(2.27G) | 7.3G | **运行中（v3 M1+M2 验证）** |
 
 ### 各模型用途说明
 
@@ -27,6 +28,7 @@
 - **SDXL Base 1.0**：T2I 备选，v1 设计中作为 FLUX 的备选角色/场景图生成器，目前未接入。
 - **FLUX.1-dev fp8**：auto 模式 `--character-mode flux` 的角色+场景图生成器（1024×1024 角色图，832×480 场景图）。**目前 8192 端口无进程，需手动重启才能用 flux 模式**。
 - **TripoSplat**：auto 模式 `--character-mode 3dgs/auto` 的角色锚核心，单图→3DGS 高斯点云（262K 高斯）。与 FLUX 共用 8192 实例（串行不抢资源），随 FLUX 一起停/启。
+- **Hunyuan3Dv2 turbo**：v3 3D 重建引擎。单图→mesh（4步一致性蒸馏，~61s）+ 多视角→mesh（3视角，~22s warm），独立 GPU1:8193 实例。DINOv2-giant 图像编码器从 DiT checkpoint 提取（prefix `conditioner.main_image_encoder.model.` 去前缀）。M1 验证：doubao.jpg→257K verts GLB；M2 验证：3视角→206K verts GLB（aspect 1.69, 主分量 63%）。
 
 ### 模型文件路径
 
@@ -63,6 +65,11 @@
     │   ├── triposplat_vae_decoder_fp16.safetensors       (550M)
     │   └── flux2-vae.safetensors                         (321M)
     └── background_removal/birefnet.safetensors           (424M)
+
+Hunyuan3Dv2（与 Wan 共用 ComfyUI/models/）:
+  diffusion_models/hunyuan3d-dit-v2-0-turbo.fp16.safetensors  (4.6G)
+  vae/hunyuan3d-vae-v2-0.fp16.safetensors                     (409M)
+  clip_vision/hunyuan3d_dinov2_giant.safetensors              (2.27G, 从 DiT 提取)
 ```
 
 ---
@@ -159,14 +166,17 @@
 
 | GPU | 显存 | 实例 | 端口 | 状态 |
 |-----|------|------|------|------|
-| GPU0 | 48G | MiniMax-H3 ref2va | 8188 | 运行中（custom 主力，46G） |
-| GPU1 | 48G | SDXL Base 1.0 | 8191 | 运行中（7G + Isaac Sim 4.4G + aluupy 训练） |
-| GPU2 | 48G | Wan2.2-5B + CosyVoice 2 + RIFE | 8189 / 9880 | 运行中（18G + 2.5G + aluupy 训练） |
-| GPU3 | 48G | HunyuanVideo 13B | 8190 | 运行中（20G + aluupy 训练） |
+| GPU0 | 48G | MiniMax-H3 ref2va | 8188 | 运行中（custom 主力，46G 按需加载） |
+| GPU1 | 48G | Hunyuan3Dv2 turbo | 8193 | 运行中（~15G 按需加载 + aluupy 训练） |
+| GPU2 | 48G | Wan2.2-5B + RIFE + CosyVoice 2 | 8189 / 9880 | 运行中（18G + 2.5G + aluupy 训练） |
+| GPU3 | 48G | HunyuanVideo 13B | 8190 | 运行中（20G 按需加载 + aluupy 训练） |
 
 - **FLUX.1-dev fp8 (8192) 已停**：auto 模式 `--character-mode flux/3dgs/auto` 需先重启 8192（TripoSplat 随 FLUX 共实例）
+- **SDXL (8191) 已停**：未接入流水线，需要时重启
+- **Hunyuan3Dv2 独立 GPU1:8193**：不再与 Wan 共实例，3D 重建与视频生成可并行
 - faster-whisper STT 按需加载，共享 GPU 显存（不独立常驻）
 - aluupy 在 GPU1/2/3 有训练任务，不能动
+- ⚠️ ComfyUI 启动不能加 `--cuda-device`，否则覆盖 `CUDA_VISIBLE_DEVICES`（main.py:87）
 
 ---
 
@@ -180,6 +190,7 @@
 | `custom` | H3 ref2va | 8188 |
 | `quick` | Wan T2V + TTS | 8189 + 9880 |
 | 任意 `--stt` | + faster-whisper（GPU） | 内嵌 |
+| v3 mesh 重建 | Hunyuan3Dv2（ComfyUI 8193） | 8193 |
 
 ---
 
@@ -194,5 +205,7 @@
 | `HunyuanVideo-部署记录.md` | HunyuanVideo 13B + LLaVA-Llama3 + CLIP-L + VAE |
 | `SDXL-部署记录.md` | SDXL Base 1.0 |
 | `FLUX-部署记录.md` | FLUX.1-dev fp8 + T5-XXL + VAE（含 TripoSplat 共实例配置） |
+
+> Hunyuan3Dv2 turbo 无独立部署记录文件，M1+M2 验证过程见 v3-design.md §13 完成详情。模型从 `tencent/Hunyuan3D-2` HuggingFace repo 下载（hf-mirror 镜像），DINOv2-giant 从 DiT checkpoint 提取。
 
 > 模型文件统一存 `/mnt/dataset/zxy/<Model>-ComfyUI/`（mergerFS 机械盘），通过 `extra_model_paths.yaml` 映射到 ComfyUI。

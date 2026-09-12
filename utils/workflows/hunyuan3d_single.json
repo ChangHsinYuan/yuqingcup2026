@@ -1,0 +1,13 @@
+{
+  "1": {"class_type": "LoadImage", "inputs": {"image": {{image_filename}}}},
+  "2": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": "hunyuan3d_dinov2_giant.safetensors"}},
+  "3": {"class_type": "CLIPVisionEncode", "inputs": {"clip_vision": ["2", 0], "image": ["1", 0], "crop": "center"}},
+  "4": {"class_type": "Hunyuan3Dv2Conditioning", "inputs": {"clip_vision_output": ["3", 0]}},
+  "5": {"class_type": "EmptyLatentHunyuan3Dv2", "inputs": {"resolution": 3072, "batch_size": 1}},
+  "6": {"class_type": "UNETLoader", "inputs": {"unet_name": "hunyuan3d-dit-v2-0-turbo.fp16.safetensors", "weight_dtype": "default"}},
+  "7": {"class_type": "VAELoader", "inputs": {"vae_name": "hunyuan3d-vae-v2-0.fp16.safetensors"}},
+  "8": {"class_type": "KSampler", "inputs": {"model": ["6", 0], "seed": {{seed}}, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "positive": ["4", 0], "negative": ["4", 1], "latent_image": ["5", 0], "denoise": 1.0}},
+  "9": {"class_type": "VAEDecodeHunyuan3D", "inputs": {"samples": ["8", 0], "vae": ["7", 0], "num_chunks": 8000, "octree_resolution": 256}},
+  "10": {"class_type": "VoxelToMesh", "inputs": {"voxel": ["9", 0], "algorithm": "surface net", "threshold": 0.6}},
+  "11": {"class_type": "SaveGLB", "inputs": {"mesh": ["10", 0], "filename_prefix": {{filename_prefix}}}}
+}
