@@ -2,7 +2,7 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1/v2 见 [v1-design.md](./v1-design.md)/[v2-design.md](./v2-design.md)
 >
-> **状态：🚧 实现中**（M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 待开始）
+> **状态：✅ 已完成**（M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 跳过——v3 核心能力已验证，长片验证不产生新架构发现，直接进入 v4）
 >
 > **M0 headless 渲染验证** ✅：trimesh + pyrender + EGL 后端，box/icosphere GLB 渲染成功
 > **M1 Hunyuan3Dv2 mesh 重建** ✅：DiT turbo + VAE + DINOv2-giant 提取，ComfyUI workflow 验证通过

@@ -478,6 +478,51 @@ class LLMClient:
         ]
         return self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=180, retries=2)
 
+    def scout_topics(self, hot_topics: list, account_type: str = '',
+                     n_candidates: int = 5) -> list:
+        """热点→视频概念候选排序（scout 选题）
+
+        Args:
+            hot_topics: 爬虫抓取的热点列表 [{title, source, heat, snippet}]
+            account_type: 账号定位（如"影视解说"/"萌宠"/"情感"/"科技科普"）
+            n_candidates: 生成候选数
+
+        Returns:
+            [{concept, angle, reason, predicted_score, source_topic}] 按 predicted_score 降序
+        """
+        topics_text = '\n'.join(
+            f'{i+1}. [{t["source"]}] {t["title"]}'
+            f'{" (热度:" + str(t["heat"]) + ")" if isinstance(t.get("heat"), (int, float)) and t["heat"] > 0 else ""}'
+            f'{" — " + t["snippet"][:60] if t.get("snippet") else ""}'
+            for i, t in enumerate(hot_topics[:30])
+        )
+
+        account_desc = f'账号定位：{account_type}' if account_type else '账号定位：通用短视频'
+        system = (
+            '你是短视频选题专家。根据当前热点话题，为指定账号生成视频概念候选。\n'
+            f'{account_desc}\n'
+            '要求：\n'
+            '- 每个概念必须是一个可以直接用于视频生成的简短中文描述（一句话，如"一只猫在月球上跳舞"）\n'
+            '- 概念要结合热点，但不能只是复述热点，要有创意角度（如拟人化、反转、科普、情感共鸣）\n'
+            '- 概念要适合 AI 视频生成（有画面感、角色明确、场景清晰）\n'
+            '- predicted_score 1-10 分，评估该概念的传播潜力（热点关联度+创意度+画面感）\n'
+            '- angle 是创意角度的一句话说明\n'
+            '- reason 是选题理由\n'
+            '- source_topic 是关联的热点标题\n'
+            f'- 生成 {n_candidates} 个候选，按 predicted_score 从高到低排列\n'
+            '- 输出 JSON 数组：\n'
+            '[{"concept":"...","angle":"...","reason":"...","predicted_score":8,"source_topic":"..."}]'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'当前热点：\n{topics_text}'},
+        ]
+        result = self.chat_json(messages, model=self.models['script'],
+                                temperature=0.7, timeout=60, retries=1)
+        if isinstance(result, list):
+            return sorted(result, key=lambda x: x.get('predicted_score', 0), reverse=True)
+        return result
+
 
 if __name__ == '__main__':
     import argparse

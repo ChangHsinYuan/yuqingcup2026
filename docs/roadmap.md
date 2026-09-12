@@ -13,7 +13,7 @@
 | 摄影/演员 | 生图生视频模型 | SDXL / FLUX / Wan / HunyuanVideo / MiniMax-H3 |
 | 角色锚 | 3D 重建 | TripoSplat(3DGS) / Hunyuan3D(mesh)，跨镜头不漂移 |
 | 配音员 | TTS 双引擎 | edge-tts（自然在线）+ CosyVoice 2（本地克隆） |
-| 审片员 | 多模态 LLM（haiku-4-5 主力 / sonnet-4-6 严格备选） | 逐帧读图打分，闭环重做 |
+| 审片员 | 多模态 LLM（qwen3.8-chat 主力） | 逐帧读图打分，闭环重做 |
 | 剪辑师 | ffmpeg + moviepy | 拼接/字幕/配乐/调色/转场 |
 
 **核心创新**：3DGS 充当"角色锚"——每镜头起始帧由 RenderSplat 从同一 3DGS 按镜头角度渲染，喂 I2V 生成，避免跨镜头角色漂移。
@@ -25,7 +25,7 @@
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  产品层   v0 ✅ 有声短片 → v1 ✅ 角色一致性 → v2 ✅ 长视频       │
-│         v3 🚧 2D→3D→新视角(M0+M1+M2+M3+M4完成) → v4 📐 营销号流水线  │
+│         v3 ✅ 2D→3D→新视角(M0-M7完成,M8跳过) → v4 🚧 营销号流水线  │
 ├──────────────────────────────────────────────────────────┤
 │  编排层   opencode agent runtime                          │
 │           director + subagents(reviewer) + skills         │
@@ -106,8 +106,7 @@
 | 模型 | 用途 |
 |------|------|
 | deepseek-v4-flash | 编剧、prompt 优化、LUT 风格选择、BGM mood 选择 |
-| claude-haiku-4-5 | 多模态审片（主力，4s/镜） |
-| claude-sonnet-4-6 | 严格审片备选（534s/镜太慢） |
+| qwen3.8-chat | 多模态审片（主力，~30-120s/镜，支持视觉） |
 
 > USTC API：`https://api.llm.ustc.edu.cn/v1`，key 存 `config/config.json`
 
@@ -134,7 +133,7 @@
   ├─[LLM] 每镜 scene_desc → 英文 video_prompt
   ├─[Wan T2V 8189] 每镜生成视频片段（随机 seed 防缓存）
   ├─[TTS 9880 双引擎] 旁白文本 → 配音音频（edge-tts 自然 / CosyVoice 克隆）
-  ├─[多模态 LLM haiku-4-5] 逐镜审片(抽4帧读图打分,4s/镜) → 不通过则调prompt+新seed重做(≤2次)
+  ├─[多模态 LLM qwen3.8-chat] 逐镜审片(抽1帧读图打分,30-120s/镜) → 不通过则调prompt+新seed重做(≤2次)
   ├─[ffmpeg+moviepy] 拼接片段 + 配音合成 + 字幕(用TTS时间戳) + 转场
   └─[元数据] output/{task_id}/meta.json + final.mp4
 ```
@@ -239,7 +238,7 @@
 
 **涉及文件**：`vidance.py`（concat 子命令 + --duration/--slowmo）、`pipeline.py`（slowmo 接线 + transition_types）、`postprocess.py`（generate_transitions transition_types）、`ffmpeg_tools.py`（compose 混合过渡）、`llm.py`（script_write target_duration + slowmo/transition_out schema）
 
-### v3 — 2D→3D→新视角（🚧 M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 待开始）
+### v3 — 2D→3D→新视角（✅ M0+M1+M2+M3+M4+M5+M6+M7 完成，M8 跳过）
 
 **目标**：从 2D 内容重建 3D，生成原视角没有的新角度视频。
 
@@ -259,7 +258,7 @@
 - **M5 角色双路径** ✅：`--character-mode mesh` 接入 pipeline，`utils/hunyuan3d.py` 客户端（单图+多视角→GLB），pipeline mesh 分支（_build_character_anchor + _generate_scene_ref），doubao.jpg→282K verts GLB 28.8s + 4 角度预览 + 合成参考帧验证通过
 - **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
 - **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX→Hunyuan3Dv2→mesh_render→Wan I2V→RIFE→LUT→BGM→合成），3 镜 10.1s 成片，Shot 3 审查 retry 机制验证有效，资产入库阈值 score≥7 工作正常
-- M8: 场景一致性长片验证
+- **M8: 场景一致性长片验证** ⏭ 跳过（v3 核心能力已验证，长片不产生新架构发现，直接进入 v4）
 
 **模型**：
 
@@ -273,19 +272,23 @@
 
 **详细设计**：见 [v3-design.md](./v3-design.md)（M0+M1+M2+M3+M4+M5+M6+M7 完成，角色双路径+资产库+端到端打通）
 
-### v4 — 营销号流水线（📐 设计完成）
+### v4 — 营销号流水线（🚧 M1 完成，M2-M8 待开始）
 
 **目标**：批量自动化内容生产与发布。
 
-- **爬热点**：feedparser/yt-dlp 抓热点话题、参考图、人声
-- **声音克隆生产化**：从爬取人声克隆固定音色
-- **异步任务制**：POST 提交 + GET 轮询（对齐 Seedance 风格），支持并发批量
-- **自动发布**：跨平台上传（借鉴 MoneyPrinterTurbo 的发布模块）
-- **FunClip 自动剪辑**：阿里同生态，ASR 驱动的智能裁剪
+**进度**：
+- **M1 爬虫+选题** ✅：`utils/crawler.py`（B站API+微博+知乎+百度+RSS+yt-dlp）+ `llm.scout_topics()`（热点→概念候选排序）+ scout subagent + topic_scouting skill。端到端验证：45 条热点 → 5 个概念候选（9/8/8/7/7 分）
+- M2 异步任务队列（FastAPI + SQLite）+ scheduler
+- M3 声音克隆生产化
+- M4 FunClip 智能裁剪
+- M5 发布模块 + publisher subagent
+- M6 素材爬取
+- M7 批量端到端联调
+- M8 无人值守批量生产验证
 
-**新增依赖**：爬虫库、任务队列、发布 API、FunClip
+**新增依赖**：feedparser ✅、yt-dlp ✅、bs4+lxml ✅、fastapi+uvicorn ✅、任务队列、发布 API、FunClip
 
-**详细设计**：见 [v4-design.md](./v4-design.md)（📐 设计完成）
+**详细设计**：见 [v4-design.md](./v4-design.md)（🚧 M1 完成，M2-M8 待开始）
 
 ---
 
@@ -314,8 +317,7 @@
 | 服务 | 用途 | 状态 |
 |------|------|------|
 | USTC deepseek-v4-flash | 编剧、prompt 优化、LUT 风格选择、BGM mood 选择 | ✅ 免费 |
-| USTC claude-haiku-4-5 | 多模态审片（主力，4s/镜） | ✅ 免费 |
-| USTC claude-sonnet-4-6 | 严格审片备选（review_strict，534s/镜太慢） | ✅ 免费 |
+| USTC qwen3.8-chat | 多模态审片（主力，~30-120s/镜，支持视觉） | ✅ 免费 |
 
 > USTC API：`https://api.llm.ustc.edu.cn/v1`，key 存 `config/config.json`（不入 git）
 
@@ -330,7 +332,7 @@
 5. **TTS 双引擎**：edge-tts 默认（自然省 GPU）+ CosyVoice 兜底/克隆；音色按前缀路由（edge-* / cosy-*）
 6. **CosyVoice v2 而非 v3**：稳定优先，社区部署经验多
 7. **字幕用 TTS 时间戳**：edge-tts 词级 + CosyVoice 句子级，均精确，v0 不引入 STT
-8. **审片用 haiku-4-5**：4s/镜（sonnet 534s/镜太慢），质量够用，sonnet 留 review_strict
+8. **审片用 qwen3.8-chat**：支持视觉，~30-120s/镜，180s timeout + 2 retries + safe fallback
 9. **3DGS 优先于 mesh 路径**：RenderSplat 全程 headless 可 API 调用；mesh 渲染需浏览器 WebGL，留 v3 解决 headless 方案
 10. **每镜随机 seed**：防 ComfyUI 缓存命中秒出旧结果
 11. **审片 3 次上限 + 最高分兜底**：防死循环，保证流水线不卡
@@ -382,8 +384,8 @@ vidance/
 │   ├── v2-design.md           # v2 长视频+完整后期设计（✅ 已完成）
 │   ├── v2.5-design.md         # v2.5 多入口架构+H3引擎接入（✅ 已完成）
 │   ├── deployed-models.md     # 已部署模型清单
-│   ├── v3-design.md           # v3 2D→3D→新视角设计（🚧 M0-M7 完成，M8 待开始）
-│   ├── v4-design.md           # v4 营销号流水线设计（📐 设计完成）
+│   ├── v3-design.md           # v3 2D→3D→新视角设计（✅ M0-M7 完成，M8 跳过）
+│   ├── v4-design.md           # v4 营销号流水线设计（🚧 M1 完成，M2-M8 待开始）
 │   ├── hierachy.md
 │   ├── tech.md
 │   └── experience.md
