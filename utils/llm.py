@@ -55,7 +55,10 @@ class LLMClient:
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     result = json.loads(resp.read())
-                return result['choices'][0]['message']['content']
+                content = result['choices'][0]['message']['content']
+                if content is None:
+                    raise RuntimeError('LLM returned None content')
+                return content
             except urllib.error.HTTPError as e:
                 raise RuntimeError(f'LLM API {e.code}: {e.read().decode()}')
             except Exception as e:
@@ -89,7 +92,7 @@ class LLMClient:
             raise
 
     @staticmethod
-    def _image_to_base64(path: str, max_size: int = 768) -> str:
+    def _image_to_base64(path: str, max_size: int = 512) -> str:
         """读取图片并转为 base64 data URL，自动缩放到 max_size 内以减少 payload"""
         img = Image.open(path)
         if img.mode == 'RGBA':
@@ -446,7 +449,7 @@ class LLMClient:
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': content},
         ]
-        return self.chat_json(messages, model=model, temperature=0.3, timeout=60, retries=1)
+        return self.chat_json(messages, model=model, temperature=0.3, timeout=180, retries=2)
 
     def review_character(self, character_ref: str, preview_paths: list) -> dict:
         """角色锚质量审查：参考图+多角度预览→{score, pass, feedback}"""
@@ -465,7 +468,7 @@ class LLMClient:
         content = [{'type': 'text', 'text': '第一张是角色参考图，其余是多角度3D渲染预览，请评估3D重建质量。'}]
         b64 = self._image_to_base64(character_ref)
         content.append({'type': 'image_url', 'image_url': {'url': b64}})
-        for path in preview_paths:
+        for path in preview_paths[:2]:
             b64 = self._image_to_base64(path)
             content.append({'type': 'image_url', 'image_url': {'url': b64}})
 
@@ -473,7 +476,7 @@ class LLMClient:
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': content},
         ]
-        return self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=60, retries=1)
+        return self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=180, retries=2)
 
 
 if __name__ == '__main__':

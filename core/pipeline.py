@@ -648,7 +648,7 @@ class Pipeline:
                 print(f'  audio: {audio_path} ({tts_result["duration"]:.1f}s)')
 
             # 抽帧
-            frames = extract_frames(video_path, n_frames=2,
+            frames = extract_frames(video_path, n_frames=1,
                                     output_dir=os.path.join(clips_dir, 'frames'))
             print(f'  frames: {len(frames)}')
 

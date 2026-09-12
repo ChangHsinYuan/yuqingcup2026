@@ -100,6 +100,7 @@ class RIFEClient(ComfyClient):
             {video_path, multiplier, fps}
         """
         import tempfile
+        import shutil
         from PIL import Image
 
         tmpdir = tempfile.mkdtemp(prefix='rife_slowmo_')
@@ -172,15 +173,18 @@ class RIFEClient(ComfyClient):
 
                 interpolated_frames.append(os.path.join(tmpdir, frames[i + 1]))
 
-            # 3. 用 ffmpeg 重组慢动作视频
-            list_file = os.path.join(tmpdir, 'filelist.txt')
-            with open(list_file, 'w') as f:
-                for fp in interpolated_frames:
-                    f.write(f"file '{fp}'\n")
+            # 3. 复制所有插帧到统一目录，用 image2 demuxer 编码
+            combined_dir = os.path.join(tmpdir, 'combined')
+            os.makedirs(combined_dir, exist_ok=True)
+            for idx, fp in enumerate(interpolated_frames):
+                dst = os.path.join(combined_dir, f'frame_{idx:06d}.png')
+                if os.path.normpath(fp) != os.path.normpath(dst):
+                    shutil.copy2(fp, dst)
 
             subprocess.run(
-                ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_file,
-                 '-r', str(fps), '-c:v', 'libx264', '-crf', '18',
+                ['ffmpeg', '-y', '-framerate', str(fps),
+                 '-i', os.path.join(combined_dir, 'frame_%06d.png'),
+                 '-c:v', 'libx264', '-crf', '18',
                  '-pix_fmt', 'yuv420p', output_path],
                 capture_output=True, timeout=300,
             )
@@ -193,7 +197,6 @@ class RIFEClient(ComfyClient):
             }
 
         finally:
-            import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 

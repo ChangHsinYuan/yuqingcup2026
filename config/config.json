@@ -5,8 +5,8 @@
     "models": {
       "script": "deepseek-v4-flash",
       "prompt_opt": "deepseek-v4-flash",
-      "review": "claude-haiku-4-5",
-      "review_strict": "claude-sonnet-4-6"
+      "review": "qwen3.8-chat",
+      "review_strict": "qwen3.8-chat"
     }
   },
   "comfyui": {
