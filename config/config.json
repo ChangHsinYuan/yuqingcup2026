@@ -10,20 +10,44 @@
     }
   },
   "comfyui": {
-    "wan": {"host": "127.0.0.1", "port": 8189},
-    "hunyuan": {"host": "127.0.0.1", "port": 8190},
-    "hunyuan3d": {"host": "127.0.0.1", "port": 8193},
-    "sdxl": {"host": "127.0.0.1", "port": 8191},
-    "flux": {"host": "127.0.0.1", "port": 8192},
-    "triposplat": {"host": "127.0.0.1", "port": 8192},
-    "h3": {"host": "127.0.0.1", "port": 8188}
+    "wan": {
+      "host": "127.0.0.1",
+      "port": 8189
+    },
+    "hunyuan": {
+      "host": "127.0.0.1",
+      "port": 8190
+    },
+    "hunyuan3d": {
+      "host": "127.0.0.1",
+      "port": 8193
+    },
+    "sdxl": {
+      "host": "127.0.0.1",
+      "port": 8191
+    },
+    "flux": {
+      "host": "127.0.0.1",
+      "port": 8192
+    },
+    "triposplat": {
+      "host": "127.0.0.1",
+      "port": 8192
+    },
+    "h3": {
+      "host": "127.0.0.1",
+      "port": 8188
+    }
   },
   "tts": {
     "host": "127.0.0.1",
     "port": 9880,
     "model_dir": "/mnt/dataset/zxy/CosyVoice2-0.5B",
     "default_voice": "edge-moe",
-    "engines": ["cosyvoice", "edge-tts"],
+    "engines": [
+      "cosyvoice",
+      "edge-tts"
+    ],
     "edge_voices": {
       "edge-xiaoxiao": "晓晓-女声自然",
       "edge-xiaoyi": "晓伊-女声活泼",
@@ -71,14 +95,27 @@
   "color": {
     "enabled": true,
     "lut_dir": "/mnt/disk_sdb/zxy/vidance/utils/luts",
-    "styles": ["cinematic", "warm", "cool", "vintage", "vivid", "soft"],
+    "styles": [
+      "cinematic",
+      "warm",
+      "cool",
+      "vintage",
+      "vivid",
+      "soft"
+    ],
     "default_style": "cinematic"
   },
   "bgm": {
     "enabled": true,
-    "moods": ["calm", "uplifting", "mysterious", "dramatic", "playful"],
+    "moods": [
+      "calm",
+      "uplifting",
+      "mysterious",
+      "dramatic",
+      "playful"
+    ],
     "default_mood": "calm",
-    "volume": 0.3,
+    "volume": 0.9,
     "custom_dir": "/mnt/disk_sdb/zxy/vidance/bgm"
   },
   "stt": {

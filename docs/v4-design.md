@@ -2,7 +2,7 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1-v3 见对应 design 文档
 >
-> **状态：🚧 实现中**（M1 完成：爬虫+选题，M2-M8 待开始）
+> **状态：🚧 实现中**（M1+M2+M3 完成：爬虫+选题+异步任务队列+声音克隆生产化，M4-M8 待开始）
 
 ## 1. 概述
 
@@ -469,3 +469,41 @@ python core/scheduler.py --auto-scout --account "影视解说" --publish youtube
 | M8 | 无人值守批量生产验证 | v4 上线 |
 
 > 依赖 v1-v3 完成。v4 是工程化阶段，引擎复用，重点在调度/爬虫/发布/异步。
+
+### M1 完成详情（2026-09-12）
+
+- `utils/crawler.py`（~250行）：B站 API + 微博热搜 + 知乎热榜 + 百度热搜 + 通用 RSS + YouTube trending（yt-dlp）
+- `llm.scout_topics()`：热点→概念候选排序（predicted_score 1-10，含 concept/angle/reason/source_topic）
+- `.opencode/agents/scout.md` + `.opencode/skills/topic_scouting/SKILL.md`
+- 端到端验证：45 条热点（B站/微博/知乎各 15）→ 5 个概念候选（9/8/8/7/7 分）
+
+### M2 完成详情（2026-09-12）
+
+- `core/scheduler.py`（~300行）：`TaskQueue`（SQLite 持久化，submit/get/list/cancel/update）+ `Scheduler`（线程轮询，subprocess 调用 `vidance.py auto --task-id`）+ CLI（run/submit/list/status/cancel/dashboard）
+- `core/api_server.py`（~130行）：FastAPI :8894，POST/GET/DELETE /api/tasks + /api/health + /api/scout + /api/dashboard
+- `core/dashboard.py`（~200行）：自包含 HTML 仪表盘，base64 嵌入缩略图，队列统计+任务列表+选题批次，30s auto-refresh
+- `pipeline.py` + `vidance.py` 修改：`--task-id` 参数传入，调度器与 pipeline 共享 task_id
+- 端到端验证：3 任务提交 → 串行执行（max_concurrent=1）→ 3 成片
+  - 柴犬在樱花树下打坐冥想（4镜, 12.7s, 832×480, warm LUT, calm BGM）
+  - 赛博朋克城市的霓虹雨夜街道（3镜, 11.4s, 1280×704, cool LUT, mysterious BGM）
+  - 小厨娘在魔法森林里煮蘑菇汤（4镜, 11.9s, 832×480）
+- 可视化产出：`output/dashboard.html`（队列仪表盘）+ `output/m2_results.html`（M2 成片展示页，含角色参考图+合成参考帧+视频信息）
+
+### M3 完成详情（2026-09-13）
+
+- `utils/voice_clone.py`（~420行）：`VoiceCloner` 完整克隆流水线
+  - **搜索**：B站 `x/web-interface/search/type` API + 随机 `buvid3` cookie 过反爬（yt-dlp `bilisearch` 被 412 拦截），按播放量降序 + 时长过滤（≥180s 保证有足够人声）
+  - **下载**：yt-dlp bestaudio，文件名按 bvid 隔离（防同名跳过下载返回旧候选音频）
+  - **切段**：faster-whisper VAD（扫描前 300s）→ 过滤纯 ♪ 器乐段 → 相邻合并（间隔<0.4s，解说语速连续会合并成巨块）→ 候选 = 5-12s 块 + 巨块取前 8s/中间 8s 窗口 → 跳过片头 3s → 按接近 8s 排序 → 质量门（ffmpeg volumedetect mean_volume > -32dB）
+  - **转格式**：ffmpeg → 24kHz mono 16bit wav（CosyVoice 要求）
+  - **转写**：faster-whisper STT 自动生成 prompt_text
+  - **注册**：`voices/{name}/prompt.wav` + `meta.json`（prompt_text/desc/来源）→ TTS server 扫描注册 `cosy-{name}`
+  - **测试**：TTS 合成测试句 → `voice_samples/cosy-{name}__{desc}.wav` 试听
+- `tts_server.py`：加 `POST /voices/reload` 热加载端点（免重启注册新音色）
+- `api_server.py`：加 `POST /api/clone_voice`（异步线程，下载+VAD+转写 1-3 分钟）+ `GET /api/clone_voice/{job_id}` + `GET /api/voices`
+- 端到端验证（3 音色全通，单音色 21-30s）：
+  - `cosy-xinwen1` 新闻播音-男声（源：B站新闻速递，prompt_text="1.新华社9月11日报道..."）
+  - `cosy-jieshuo1` 影视解说-男声（源：《消失在第七街》解说）
+  - `cosy-jilupian1` 纪录片-男声（API 异步端点克隆）
+  - STT 转写回验克隆合成内容一致；注册音色可按名直接调用（无需传 prompt_wav）
+- 调试修复：①测试合成 synthesize 需传 output_path；②解说风语音连续 → 音乐过滤下移到段级别（只跳纯 ♪ 段）+ 巨块取多窗口；③yt-dlp 同名跳过下载 → 文件名按 bvid 隔离

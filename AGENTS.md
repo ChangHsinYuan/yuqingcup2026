@@ -8,7 +8,7 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1 完成**（2026-09-12）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1+M2+M3 完成**（2026-09-13）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -32,8 +32,10 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
 - **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX 三视图→Hunyuan3Dv2 multiview→mesh_render→Wan I2V→RIFE slowmo→LUT→BGM→合成），3 镜 12.8s 成片 `output/20260912_183520/final.mp4`。**修复**：RIFE slowmo（4帧→233帧，concat demuxer→image2 demuxer）、LLM 审查模型（claude-haiku-4-5 下架→qwen3.8-chat）、审查超时（60s→180s+retries=2）、multiview mesh（单图 Z=0.009 纸片→三视图 Z=1.56 真实3D）。审查系统生效：角色 score=3、Shot 2 score=3.2/4（retry）、Shot 3 score=6/5/5（retry）
 
-**v4 营销号流水线**（M1 完成，M2-M8 待开始）：
+**v4 营销号流水线**（M1+M2+M3 完成，M4-M8 待开始）：
 - **M1 爬虫+选题** ✅：`utils/crawler.py`（B站 API+微博+知乎+百度+RSS+yt-dlp 多源热点抓取）+ `llm.scout_topics()`（热点→概念候选排序）+ `.opencode/agents/scout.md` subagent + `.opencode/skills/topic_scouting/SKILL.md`。端到端验证：45 条热点（B站/微博/知乎各 15）→ 5 个概念候选（9/8/8/7/7 分），概念有画面感且结合热点创意角度
+- **M2 异步任务队列** ✅：`core/scheduler.py`（`TaskQueue` SQLite 持久化 + `Scheduler` 线程轮询 + CLI）+ `core/api_server.py`（FastAPI :8894，POST/GET/DELETE /api/tasks + /api/health + /api/scout + /api/dashboard）+ `core/dashboard.py`（自包含 HTML 仪表盘，base64 缩略图，30s auto-refresh）。`pipeline.py` + `vidance.py` 加 `--task-id` 参数。端到端验证：3 任务提交 → 串行执行（max_concurrent=1）→ 3 成片（柴犬 12.7s / 赛博朋克 11.4s / 小厨娘 11.9s），可视化产出 `output/dashboard.html` + `output/m2_results.html`
+- **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索 API 随机 buvid3 过反爬 → yt-dlp 下载按 bvid 隔离 → faster-whisper VAD 切段（跳过纯 ♪ 器乐、长块取 8s 窗口、均分质量门 -32dB）→ 24kHz mono 16bit ffmpeg 转换 → STT 转写 prompt_text → 入库 voices/{name}/ 自动注册 cosy-{name} → 测试合成存 voice_samples/）。TTS server 加 `POST /voices/reload` 热加载（免重启注册新音色）。API server 加 `POST /api/clone_voice` 异步克隆端点 + `GET /api/voices`。端到端验证：3 音色克隆全通（xinwen1 新闻播音 / jieshuo1 影视解说 / jilupian1 纪录片，单音色 21-30s），STT 转写回验内容一致，注册音色可按名直接调用
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -51,10 +53,13 @@ vidance/
 ├── AGENTS.md                  # 本文件
 ├── config/config.json         # 运行时配置（API key、引擎地址、模型名、音色）
 ├── core/
-│   ├── vidance.py             # 统一 CLI 入口（auto/custom/quick 三个子命令）
+│   ├── vidance.py             # 统一 CLI 入口（auto/custom/quick/concat 四子命令）
 │   ├── pipeline.py            # auto 模式流水线主控（内部模块）
 │   ├── custom_gen.py          # custom 模式 H3 ref2va 生成（内部模块）
-│   └── postprocess.py         # 共享后处理（RIFE/LUT/BGM/STT）
+│   ├── postprocess.py         # 共享后处理（RIFE/LUT/BGM/STT）
+│   ├── scheduler.py           # v4 异步任务队列（TaskQueue SQLite + Scheduler 线程轮询）
+│   ├── api_server.py          # v4 FastAPI 服务（:8894，任务提交/查询/仪表盘/选题）
+│   └── dashboard.py           # v4 HTML 仪表盘生成（队列统计+缩略图+选题批次）
 ├── utils/
 │   ├── comfy_api.py           # ComfyUI HTTP 客户端（T2V/I2V/TripoSplat/FLUX T2I/H3 ref2va）
 │   ├── llm.py                 # USTC LLM 客户端（编剧/prompt优化/审片，含图片缩放+重试）
@@ -70,6 +75,7 @@ vidance/
 │   ├── hunyuan3d.py           # v3 Hunyuan3Dv2 重建客户端（单图+多视角→GLB，M5 已封装）
 │   ├── asset_registry.py      # v3 资产库管理（CRUD+模糊搜索+CLI，M6 已封装）
 │   ├── crawler.py             # v4 热点爬虫（B站API+微博+知乎+百度+RSS+yt-dlp，M1 已封装）
+│   ├── voice_clone.py         # v4 声音克隆生产化（B站搜索+VAD切段+STT转写+音色注册，M3 已封装）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
@@ -85,6 +91,7 @@ vidance/
 │   ├── agents/{director,reviewer,asset,scout}.md
 │   └── skills/{scriptwriting,review,topic_scouting}/SKILL.md
 ├── docs/                      # 设计文档（roadmap + v0-v4 design + deployed-models）
+│   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4.md 分版本小工具）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
 ```
@@ -200,6 +207,45 @@ candidates = LLMClient().scout_topics(topics, account_type='影视解说', n_can
 for c in candidates:
     print(f'[{c[\"predicted_score\"]}] {c[\"concept\"]}')
 "
+
+# v4 异步任务队列
+# 启动 API server（含调度器，max_concurrent=1）
+python core/api_server.py --port 8894
+
+# 提交任务（CLI）
+python core/scheduler.py submit "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux
+# 提交任务（API）
+curl -X POST http://127.0.0.1:8894/api/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"concept":"深海探险","character":"蓝色水母","character_mode":"flux"}'
+
+# 查看队列
+python core/scheduler.py list
+curl http://127.0.0.1:8894/api/tasks | python -m json.tool
+
+# 查看任务状态
+python core/scheduler.py status <task_id>
+curl http://127.0.0.1:8894/api/tasks/<task_id>
+
+# 生成仪表盘
+python core/scheduler.py dashboard -o output/dashboard.html
+# 或访问 http://127.0.0.1:8894/api/dashboard
+
+# v4 声音克隆生产化
+# 搜索人声源（B站）
+python utils/voice_clone.py search --keyword 新闻播报 --top 10
+# 完整克隆流水线（搜索→下载→VAD切段→转写→注册→测试合成）
+python utils/voice_clone.py clone --keyword 新闻播报 --name xinwen1 --desc "新闻播音-男声"
+# 测试已注册音色（样本存 voice_samples/）
+python utils/voice_clone.py test --name xinwen1
+# 列出已注册音色
+python utils/voice_clone.py list
+# 热加载新音色（免重启 TTS server）
+curl -X POST http://127.0.0.1:9880/voices/reload
+# API 异步克隆（提交后轮询 /api/clone_voice/{job_id}）
+curl -X POST http://127.0.0.1:8894/api/clone_voice \
+  -H 'Content-Type: application/json' \
+  -d '{"keyword":"纪录片解说","name":"jilupian1","desc":"纪录片-男声"}'
 ```
 
 ## TTS 音色规范
@@ -210,7 +256,7 @@ for c in candidates:
 |------|------|------|
 | `edge-*` | edge-tts（微软在线，自然） | `edge-xiaoxiao` 晓晓 / `edge-moe` 萌系高音 / `edge-family` 家人们风 |
 | `cosy-*` | CosyVoice（本地 GPU，可克隆） | `cosy-default` / `cosy-cross` |
-| `cosy-<自定义>` | CosyVoice 自定义克隆 | 在 `voices/<名>/prompt.wav` 放素材自动注册 |
+| `cosy-<自定义>` | CosyVoice 自定义克隆 | `voices/<名>/prompt.wav` + `meta.json`（prompt_text/desc）自动注册，或 `utils/voice_clone.py clone` 全自动爬取克隆；新增后 `POST /voices/reload` 热加载 |
 
 试听样本：`vidance/voice_samples/`（17 个 wav）。默认音色 `edge-moe`（config.json，萌系高音-哈基米风）。
 
@@ -225,6 +271,7 @@ for c in candidates:
 | FLUX + TripoSplat (ComfyUI) | 8192 | — | comfyui |
 | SDXL (ComfyUI) | 8191 | — | comfyui |
 | TTS 双引擎 (edge-tts + CosyVoice) | 9880 | GPU2 | cosyvoice |
+| Vidance API (任务队列 + 仪表盘) | 8894 | — | comfyui |
 
 > H3 (8188) 独占 GPU0，用于 custom 模式参考图条件视频生成。模型按需加载，首次 workflow 触发后占 ~46G。
 > Hunyuan3Dv2 (8193) 独占 GPU1，v3 3D 重建引擎。

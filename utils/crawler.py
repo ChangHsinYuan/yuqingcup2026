@@ -17,6 +17,7 @@
 """
 import json
 import os
+import re
 import time
 import random
 import urllib.request
@@ -147,15 +148,17 @@ class Crawler:
                 target = item.get('target', {})
                 title = target.get('title', '')
                 excerpt = target.get('excerpt', '')
-                heat = item.get('detail_text', '')
+                heat_text = item.get('detail_text', '')  # e.g. "1543 万热度"
+                m = re.search(r'([\d.]+)\s*万', heat_text)
+                heat = int(float(m.group(1)) * 10000) if m else i + 1
                 topics.append({
                     'title': title,
                     'source': 'zhihu',
-                    'heat': i + 1,
+                    'heat': heat,
                     'url': f'https://www.zhihu.com/question/{target.get("id", "")}',
                     'snippet': excerpt[:80] if excerpt else '',
                     'rank': i + 1,
-                    'extra': {'heat_text': heat},
+                    'extra': {'heat_text': heat_text},
                 })
             return topics
         except Exception:
@@ -187,43 +190,48 @@ class Crawler:
         return topics
 
     def _fetch_baidu(self) -> list:
-        """百度热搜 — 网页抓取"""
+        """百度热搜 — 网页抓取
+
+        注意：class 后缀为构建哈希（如 hot-desc_1m_jR / _1kjb24），会随版本变化，
+        选择器一律用前缀匹配（[class*="..."]），不写死完整 class。
+        """
         url = 'https://top.baidu.com/board?tab=realtime'
         resp = _get(url, encoding='utf-8')
         soup = BeautifulSoup(resp.text, 'lxml')
 
-        items = soup.select('.c-single-text-clip')
+        items = soup.select('div[class*="category-wrap"]')
         topics = []
         seen = set()
         rank = 0
         for item in items:
-            title = item.get_text(strip=True)
+            title_el = item.select_one('[class*="single-text-ellipsis"]')
+            if not title_el:
+                title_el = item.select_one('a[class*="title_"]')
+            title = title_el.get_text(strip=True) if title_el else ''
             if not title or title in seen:
                 continue
             seen.add(title)
             rank += 1
-            parent = item.find_parent('div', class_='category-wrap_iQLoo')
-            snippet = ''
-            heat_text = ''
-            if parent:
-                desc = parent.select_one('.hot-desc_1kjb24')
-                if desc:
-                    snippet = desc.get_text(strip=True)[:80]
-                heat_el = parent.select_one('.hot-index_1Bl1a')
-                if heat_el:
-                    heat_text = heat_el.get_text(strip=True)
+            desc = item.select_one('[class*="hot-desc_"]')
+            snippet = desc.get_text(strip=True)[:80] if desc else ''
+            heat_el = item.select_one('[class*="hot-index_"]')
+            heat_text = heat_el.get_text(strip=True) if heat_el else ''
+            m = re.search(r'([\d.]+)', heat_text.replace(',', ''))
+            heat_num = int(float(m.group(1))) if m else rank
+            tag_el = item.select_one('[class*="hot-tag_"]')
+            tag = tag_el.get_text(strip=True) if tag_el else ''
 
-            link = item.find('a')
+            link = item.select_one('a[class*="title_"]')
             href = link.get('href', '') if link else ''
 
             topics.append({
                 'title': title,
                 'source': 'baidu',
-                'heat': rank,
+                'heat': heat_num,
                 'url': href,
                 'snippet': snippet,
                 'rank': rank,
-                'extra': {'heat_text': heat_text},
+                'extra': {'heat_text': heat_text, 'tag': tag},
             })
             if rank >= 20:
                 break

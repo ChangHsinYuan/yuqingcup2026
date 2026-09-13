@@ -71,7 +71,8 @@ class Pipeline:
             bgm_override: str = None, use_stt: bool = False,
             target_duration: float = None,
             slowmo_override: int = None,
-            no_asset_reuse: bool = False) -> dict:
+            no_asset_reuse: bool = False,
+            task_id: str = None) -> dict:
         """端到端生成有声短片
 
         character_mode:
@@ -83,8 +84,10 @@ class Pipeline:
         target_duration: 目标总时长（秒），None 时默认 2-5 镜短片
         slowmo_override: 全局慢动作帧倍率，覆盖所有镜头（None 则用 LLM 标注）
         no_asset_reuse: True 时跳过资产库检索，强制重新重建 3D 资产
+        task_id: 外部指定 task_id（调度器传入），None 时自动生成时间戳
         """
-        task_id = time.strftime('%Y%m%d_%H%M%S')
+        if task_id is None:
+            task_id = time.strftime('%Y%m%d_%H%M%S')
         task_dir = os.path.join(self.output_dir, task_id)
         clips_dir = os.path.join(task_dir, 'clips')
         char_dir = os.path.join(task_dir, 'character')

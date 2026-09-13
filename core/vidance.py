@@ -51,6 +51,7 @@ def cmd_auto(args):
         target_duration=args.duration,
         slowmo_override=args.slowmo,
         no_asset_reuse=args.no_asset_reuse,
+        task_id=getattr(args, 'task_id', None),
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -225,6 +226,8 @@ def build_parser():
                         help='目标总时长（秒），动态调整镜头数（解锁长片，不指定则默认 2-5 镜）')
     p_auto.add_argument('--slowmo', type=int, default=None,
                         help='全局慢动作帧倍率（如 2 = 2x 慢放，覆盖所有镜头）')
+    p_auto.add_argument('--task-id', default=None,
+                        help='外部指定 task_id（调度器传入），不指定则自动生成时间戳')
     p_auto.set_defaults(func=cmd_auto)
 
     # ── custom 子命令 ──

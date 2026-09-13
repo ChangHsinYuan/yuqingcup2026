@@ -294,6 +294,15 @@ def list_voices():
     }
 
 
+@app.post('/voices/reload')
+def reload_voices():
+    """热加载 voices/ 目录新增的自定义音色（无需重启服务）"""
+    global CUSTOM_VOICES
+    CUSTOM_VOICES = scan_custom_voices()
+    logger.info(f'voices reloaded: {len(CUSTOM_VOICES)} custom voices')
+    return {'custom': list(CUSTOM_VOICES.keys()), 'count': len(CUSTOM_VOICES)}
+
+
 @app.post('/tts')
 async def tts(req: TTSRequest):
     try:
