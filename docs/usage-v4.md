@@ -533,6 +533,48 @@ curl http://127.0.0.1:8894/api/tasks/{task_id}
 
 ---
 
+## M6 — 快速营销号链路（utils/fastline.py）
+
+图片 + 运镜动效组成视频，**跳过视频模型**，分钟级出片。由 `vidance.py fast` 提供（也可直接跑模块）。
+
+### CLI（推荐，通过 `python core/vidance.py fast`）
+
+```bash
+# 概念 → LLM 旁白 → 必应爬图 → KenBurns 伪动态 → TTS → crossfade → LUT/BGM/STT
+python core/vidance.py fast "赛博朋克霓虹雨夜的机械狐狸" -n 5              # 自动爬图 + 自动 BGM/LUT
+python core/vidance.py fast "雪山日出小狐狸" --images dir/ --voice edge-moe  # 用自己的图
+python core/vidance.py fast "概念" --bgm epic --lut warm --stt --slowmo 2    # 指定 BGM/LUT + STT + RIFE 慢放
+```
+
+### 参数
+
+| 参数 | 说明 |
+|------|------|
+| `concept` | 热点概念 / 旁白主题（中文） |
+| `--images dir/` | 图片目录（有图则用，否则必应爬取关联图） |
+| `-n N` | 图片/段落数（默认 5） |
+| `--voice` | TTS 音色（默认 config `edge-moe`） |
+| `--motion` | 统一运镜 pan/zoom-in/zoom-out（默认 LLM 每段自选） |
+| `--seconds` | 每段时长（秒，默认按旁白对齐） |
+| `--bgm` | BGM mood（加 `epic`） |
+| `--lut` | LUT 风格 |
+| `--stt` | STT 字幕对齐（否则用估算时间轴烧字） |
+| `--slowmo N` | RIFE 慢放帧倍率（需 GPU2:8189，默认关） |
+| `-o` | 输出路径 |
+
+### Python API
+
+```python
+from utils.fastline import FastLine
+fl = FastLine()
+meta = fl.run("概念", output_path=None, images_dir=None, n=5, voice="edge-moe", speed=1.0)
+print(meta["output"], meta["duration"])
+```
+
+输出：`output/{task_id}/final.mp4` + `meta.json`（segments//clips/images/elapsed）。
+
+---
+
 ## 服务依赖（v4）
 
 | 工具 | 依赖服务 | 端口 |
@@ -544,4 +586,6 @@ curl http://127.0.0.1:8894/api/tasks/{task_id}
 | voice_clone（测试合成） | TTS server | 9880 |
 | funclip | FunASR paraformer（内嵌 GPU，自动选卡）+ ffmpeg + USTC LLM API（smart 子命令） | — |
 | asset_crawler | cn.bing.com（图片）+ incompetech.com（BGM）+ USTC LLM API（keywords/refs） | — |
+| fastline（快速链路） | cn.bing.com（爬图）+ TTS 9880 + ffmpeg（zoompan）；LUT/BGM/STT 复用后处理 | — |
+| fastline（--slowmo） | RIFE（Wan+RIFE ComfyUI） | 8189 |
 | TTS server | CosyVoice2（GPU2）+ edge-tts（在线） | 9880 |

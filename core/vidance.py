@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.pipeline import Pipeline
 from core.custom_gen import run_custom, concat_videos
 from core.postprocess import PostProcessor
+from utils.fastline import FastLine
 
 
 def cmd_auto(args):
@@ -179,6 +180,20 @@ def cmd_concat(args):
     print(f'\nDone: {output_path} ({float(dur):.1f}s)')
 
 
+def cmd_fast(args):
+    """fast 子命令：图片 + 运镜动效组成视频，跳过视频模型（v4 M6 快速链路）"""
+    fl = FastLine()
+    meta = fl.run(
+        args.concept, output_path=args.output, images_dir=args.images,
+        n=args.images_count, voice=args.voice, speed=args.speed,
+        motion=args.motion, seconds=args.seconds, task_id=args.task_id,
+        no_rife=args.no_rife, lut_override=args.lut, no_color=args.no_color,
+        bgm_override=args.bgm, no_bgm=args.no_bgm, use_stt=args.stt,
+        slowmo=args.slowmo,
+    )
+    print(f'\nDone: {meta["output"]}')
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog='vidance',
@@ -202,7 +217,7 @@ def build_parser():
     post_parent.add_argument('--no-color', action='store_true',
                              help='禁用 LUT 调色')
     post_parent.add_argument('--bgm', default=None,
-                             choices=['calm', 'uplifting', 'mysterious', 'dramatic', 'playful'],
+                             choices=['calm', 'uplifting', 'mysterious', 'dramatic', 'playful', 'epic'],
                              help='BGM mood（不指定则 LLM 自动选择）')
     post_parent.add_argument('--no-bgm', action='store_true',
                              help='禁用背景音乐')
@@ -260,6 +275,37 @@ def build_parser():
     p_concat.add_argument('--crossfade-duration', type=float, default=0.5,
                           help='交叉淡化时长（秒，仅 --transition crossfade 时生效）')
     p_concat.set_defaults(func=cmd_concat)
+
+    # ── fast 子命令（v4 M6 快速营销号链路） ──
+    p_fast = sub.add_parser('fast', parents=[output_parent],
+                            help='图片+运镜动效组成视频，跳过视频模型（快速营销号链路）')
+    p_fast.add_argument('concept', help='热点概念/旁白主题（中文）')
+    p_fast.add_argument('--images', default=None,
+                        help='图片目录（有图则用，否则必应爬取关联图）')
+    p_fast.add_argument('-n', '--images-count', type=int, default=5,
+                        help='图片/段落数（默认 5）')
+    p_fast.add_argument('--voice', default=None, help='TTS 音色')
+    p_fast.add_argument('--speed', type=float, default=1.0, help='旁白语速')
+    p_fast.add_argument('--motion', default=None,
+                        choices=['pan', 'zoom-in', 'zoom-out'],
+                        help='统一运镜（默认 LLM 每段自选 pan/zoom）')
+    p_fast.add_argument('--seconds', type=float, default=None,
+                        help='每段时长（秒，默认按旁白对齐）')
+    p_fast.add_argument('--slowmo', type=int, default=None,
+                        help='RIFE slowmo 帧倍率（需 GPU2:8189，默认关闭）')
+    p_fast.add_argument('--no-rife', action='store_true', help='禁用 RIFE 过渡')
+    p_fast.add_argument('--lut', default=None,
+                        choices=['cinematic', 'warm', 'cool', 'vintage', 'vivid', 'soft'],
+                        help='LUT 调色风格')
+    p_fast.add_argument('--no-color', action='store_true', help='禁用调色')
+    p_fast.add_argument('--bgm', default=None,
+                        choices=['calm', 'uplifting', 'mysterious', 'dramatic', 'playful', 'epic'],
+                        help='BGM mood（默认 LLM 选）')
+    p_fast.add_argument('--no-bgm', action='store_true', help='禁用 BGM')
+    p_fast.add_argument('--stt', action='store_true', help='STT 字幕对齐')
+    p_fast.add_argument('--task-id', default=None,
+                        help='外部指定 task_id（调度器传入）')
+    p_fast.set_defaults(func=cmd_fast)
 
     return parser
 

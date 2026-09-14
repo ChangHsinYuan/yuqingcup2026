@@ -434,7 +434,7 @@ python core/scheduler.py --auto-scout --account "影视解说"
 | M3 | 声音克隆生产化（爬人声→音色） | 自动音色 |
 | M4 | FunClip 智能裁剪接入 | 长素材处理 |
 | M5 | 素材爬取（参考图/BGM） | 素材自动化 |
-| M6 | 快速营销号链路（图片+运镜+RIFE，跳过视频模型） | 分钟级快速出片 |
+| M6 | 快速营销号链路（图片+运镜+RIFE，跳过视频模型） | ✅ 分钟级快速出片 |
 | ~~M7 批量端到端联调~~ | 降级：单任务已验证，批量并发价值低 | — |
 | ~~M8 无人值守批量生产验证~~ | 跳过：发布由人精挑细选手动上传 | — |
 
@@ -507,12 +507,17 @@ python core/scheduler.py --auto-scout --account "影视解说"
 
 ### M6 完成详情（2026-09-14）
 
-- `utils/fastline.py`（拟 ~350 行）：`FastLine` 快速营销号链路器
-  - **运镜**：ffmpeg zoompan（Ken Burns 推拉摇移）对静态图生成 2-4s/张动态段；`--motion auto|pan|zoom-in|zoom-out` 由 LLM 按文案情绪选
-  - **插帧**：zoompan 输出帧 → RIFE 补帧平滑（复用 `utils/rife.py` slowmo 流程），可选关闭降 CPU 占用
-  - **选图**：`fastline.py plan` LLM 按文案/关键词从参考图集挑 N 张并赋镜头序
-  - **复用**：TTS 配音 + STT 字幕（`--stt`）+ `select_bgm` BGM + yuv420p 合成（复用 compose）
-  - `vidance.py` 加新子命令 `fast`：`python core/vidance.py fast "热点概念/文案" --images dir/ -o out.mp4 --bgm epic`
-- 端到端验证：
-  - 爬热点 → LLM 选题 + 文案 → 必应爬 4-6 张关联图 → zoompan+RIFE → TTS + 字幕 + BGM → 成片 <5 分钟
-  - 全链路不出 GPU 视频模型（RIFE 若用则轻量插帧，可 `--no-rife` 纯 CPU zoompan）
+- `utils/fastline.py`（`FastLine` 类 ~375 行）：快速营销号链路器
+  - **旁白**：`plan_narration()` LLM 把概念拆 N 段旁白 + 每段运镜（pan/zoom-in/zoom-out），失败退化为标点切分
+  - **运镜**：`_kenburns()` ffmpeg zoompan（Ken Burns 推拉摇移，3 动效）静态图→2-4s 伪动态段，输出 832×480 yuv420p h264
+  - **选图**：`collect_images()` 用 `--images` 目录或必应爬取（复用 M5 asset_crawler）
+  - **复用**：逐段 TTS 旁白；`compose()` crossfade 拼接 + 估算时间轴字幕；`PostProcessor.run_all()` 施加 LUT/BGM（自动 LLM 选或 override）+ 可选 STT
+  - **慢动作**：`--slowmo N` 复用 RIFEClient.slowmo（GPU2 可选，默认关）
+  - `vidance.py` 加 `fast` 子命令：`python core/vidance.py fast "概念" [--images dir] -n N --voice --bgm --lut --stt --slowmo`
+- 端到端验证（全链路各分支）：
+  - `fast "赛博朋克霓虹雨夜的机械狐狸" -n 3`：3 关键词→必应爬 3 图→3 段旁白+TTS→Ken Burns→crossfade→9.1s 成片，55s 完成（含爬网）
+  - 自供图（--images）2 段：LLM 旁白+TTS+zoompan 全通；auto LUT（warm）+ auto BGM（calm 取 custom_dir）自动选择
+  - `--bgm epic`（custom_dir bgm/epic.wav）+ `--lut warm` 生效
+  - `--stt`：faster-whisper 转写→烧录 STT 字幕（2 段，时间戳正确）
+  - `--slowmo 2`：RIFE 插帧 36→71 帧（小样验证），输出有效
+  - **修正**：`--bgm` choices 原限 5 种，加 `epic`（bgm/epic.wav 已存在）；"RIFE 组成视频"指 zoompan 动效（本就 24fps 平滑），`--slowmo` 为可选 RIFE 增强，均跳过 Wan/I2V 视频模型
