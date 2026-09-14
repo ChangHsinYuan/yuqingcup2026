@@ -540,10 +540,25 @@ curl http://127.0.0.1:8894/api/tasks/{task_id}
 ### CLI（推荐，通过 `python core/vidance.py fast`）
 
 ```bash
-# 概念 → LLM 旁白 → 必应爬图 → KenBurns 伪动态 → TTS → crossfade → LUT/BGM/STT
-python core/vidance.py fast "赛博朋克霓虹雨夜的机械狐狸" -n 5              # 自动爬图 + 自动 BGM/LUT
-python core/vidance.py fast "雪山日出小狐狸" --images dir/ --voice edge-moe  # 用自己的图
-python core/vidance.py fast "概念" --bgm epic --lut warm --stt --slowmo 2    # 指定 BGM/LUT + STT + RIFE 慢放
+# 概念 → LLM 旁白 → 出图 → KenBurns 伪动态 → TTS → crossfade → LUT/BGM/STT
+python core/vidance.py fast "雪山日出小狐狸" -n 5                    # 自动爬图 + 自动 BGM/LUT
+python core/vidance.py fast "概念" --images-source flux -n 5          # FLUX 逐段文生图（质量可控）
+python core/vidance.py fast "概念" --images dir/ --voice edge-moe     # 用自己的图
+python core/vidance.py fast "概念" --bgm epic --lut warm --stt --slowmo 2  # 指定 BGM/LUT + STT + RIFE 慢放（出 final_slow.mp4，原片保留）
+python core/vidance.py fast "概念" --source-topic "热搜标题" --trend-date 2026-09-14  # 顶部角标+meta 记录热搜来源
+
+# 一步到位（固定流程）：爬实时热点 → LLM scout 选题 → 出片
+python core/vidance.py hot -n 5 --top-each 10 --account "影视解说"
+python core/vidance.py hot --images-source flux           # FLUX 出图（更快，跳过爬图校验）
+```
+
+### 热点成片（hot 固定流程）
+
+`python core/vidance.py hot` 一条命令完成：crawler 爬实时热点 → LLM scout 自动选题（最高分）→ fast 出片。成片自动带：
+
+- **图片相关性校验**：`--images-source crawl`（默认）对每张爬图用多模态 LLM 判相关性，不相关的自动删除，不足用 FLUX 补足（防止图/旁白错位）
+- **热搜来源角标**：片头顶部 drawtext 叠加 `{日期} 热搜: {热点标题}`（独立于字幕，不造成字幕/声音错位），并写入 meta.json 的 `source_topic`/`trend_date` 供核对
+- `--no-source` 可去掉角标；`--slowmo` 另出 RIFE 慢放版（原片保留）
 ```
 
 ### 参数
@@ -551,7 +566,12 @@ python core/vidance.py fast "概念" --bgm epic --lut warm --stt --slowmo 2    #
 | 参数 | 说明 |
 |------|------|
 | `concept` | 热点概念 / 旁白主题（中文） |
-| `--images dir/` | 图片目录（有图则用，否则必应爬取关联图） |
+| `--images dir/` | 图片目录（有图则用，否则按 `--images-source` 出图） |
+| `--images-source` | `crawl`(必应爬图+相关性校验，默认) / `flux`(FLUX 文生图) |
+| `--images-count/-n` | 图片/段落数（默认 5） |
+| `--source-topic` | 对应热搜标题（写进 meta + 片头角标，便于核对真实性） |
+| `--trend-date` | 热搜日期（如 2026-09-14，默认今天） |
+| `--no-source` | 不烧录热搜来源角标 |
 | `-n N` | 图片/段落数（默认 5） |
 | `--voice` | TTS 音色（默认 config `edge-moe`） |
 | `--motion` | 统一运镜 pan/zoom-in/zoom-out（默认 LLM 每段自选） |
@@ -559,7 +579,7 @@ python core/vidance.py fast "概念" --bgm epic --lut warm --stt --slowmo 2    #
 | `--bgm` | BGM mood（加 `epic`） |
 | `--lut` | LUT 风格 |
 | `--stt` | STT 字幕对齐（否则用估算时间轴烧字） |
-| `--slowmo N` | RIFE 慢放帧倍率（需 GPU2:8189，默认关） |
+| `--slowmo N` | RIFE 慢放帧倍率（需 GPU2:8189，视频`final_slow.mp4` 仅画面）；原片 `final.mp4` 恒保留 |
 | `-o` | 输出路径 |
 
 ### Python API

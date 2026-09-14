@@ -95,7 +95,7 @@ class LLMClient:
     def _image_to_base64(path: str, max_size: int = 512) -> str:
         """读取图片并转为 base64 data URL，自动缩放到 max_size 内以减少 payload"""
         img = Image.open(path)
-        if img.mode == 'RGBA':
+        if img.mode in ('RGBA', 'P', 'LA', 'PA'):
             img = img.convert('RGB')
         w, h = img.size
         scale = min(1.0, max_size / max(w, h))
@@ -280,6 +280,27 @@ class LLMClient:
         ]
         return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
 
+    def optimize_fastline_prompt(self, narration: str, concept: str) -> str:
+        """旁白/概念 → 英文无字单帧画面 prompt（供 fastline FLUX 生图）。
+
+        强约束：忠实呈现旁白主体（物种/物件/场景），可加风格，不含文字/字幕。
+        """
+        system = (
+            '你是短视频单帧画面prompt优化器。把中文旁白/概念翻译成英文的FLUX image generation prompt。\n'
+            '要求：\n'
+            '- 忠实保留旁白里的主体和关键元素（如"青蛙""旅行""键盘""西装"等，物种/物件/场景不能丢、不能替换成别的）\n'
+            '- 可补充风格与氛围词（cinematic, high detail, 横图感）\n'
+            '- 不要出现任何文字/字幕/logo（silent, no text）\n'
+            '- 英文，不超过80词\n'
+            '- 只输出prompt文本，不加解释\n'
+            f'- 整体概念背景：{concept}'
+        )
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'旁白/概念：{narration}'},
+        ]
+        return self.chat(messages, model=self.models['prompt_opt'], temperature=0.5).strip()
+
     def select_lut(self, concept: str, script: dict, available_styles: list) -> str:
         """根据脚本内容自动选择最佳 LUT 调色风格。
 
@@ -458,8 +479,41 @@ class LLMClient:
             r.setdefault('pass', float(r.get('score', 7)) >= 7)
         return r
 
+    def assess_image_relevance(self, image_path: str, query: str,
+                               model: str = None, threshold: float = 7.0) -> dict:
+        """多模态判断图片与 query(概念/热点) 的相关性，返回 {score(1-10), pass, reason}。
+
+        用于"爬图+相关性校验"：过滤必应/搜索返回的不相关图（防止图与旁白错位），
+        只保留相关图，不够再由 FLUX 补足。
+        """
+        model = model or self.models['review']
+        system = (
+            '你是图片选材专家。判断给定图片与文字主题的相关性，输出1-10分的匹配度。\n'
+            f'≥{threshold}分才算相关（能直接用来配这条主题画面）。\n'
+            '仅输出JSON：{"score": 8, "pass": true, "reason": "一句话理由"}'
+        )
+        content = [{'type': 'text', 'text': f'主题：{query}\n判断该图与主题的相关性并打分。'}]
+        content.append({'type': 'image_url',
+                        'image_url': {'url': self._image_to_base64(image_path)}})
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': content},
+        ]
+        try:
+            r = self.chat_json(messages, model=model, temperature=0.3, timeout=120, retries=1)
+        except Exception as e:
+            # 视觉评审失败时保守放行（不影响主流程）
+            return {'score': threshold, 'pass': True, 'reason': f'评审失败放行: {e}'}
+        score = float(r.get('score', threshold)) if isinstance(r, dict) else threshold
+        return {
+            'score': score,
+            'pass': score >= threshold,
+            'reason': (r.get('reason', '') if isinstance(r, dict) else ''),
+        }
+
     def review_character(self, character_ref: str, preview_paths: list) -> dict:
-        """角色锚质量审查：参考图+多角度预览→{score, pass, feedback}"""
+        """角色锚质量审查：参考图+多角度预览→{score, pass, feedback}
+        """
         system = (
             '你是3D角色质量审查专家。根据角色参考图和多角度3D渲染预览，评估3D重建质量。\n'
             '按4个维度打分（每维1-10）：\n'

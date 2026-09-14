@@ -513,11 +513,14 @@ python core/scheduler.py --auto-scout --account "影视解说"
   - **选图**：`collect_images()` 用 `--images` 目录或必应爬取（复用 M5 asset_crawler）
   - **复用**：逐段 TTS 旁白；`compose()` crossfade 拼接 + 估算时间轴字幕；`PostProcessor.run_all()` 施加 LUT/BGM（自动 LLM 选或 override）+ 可选 STT
   - **慢动作**：`--slowmo N` 复用 RIFEClient.slowmo（GPU2 可选，默认关）
-  - `vidance.py` 加 `fast` 子命令：`python core/vidance.py fast "概念" [--images dir] -n N --voice --bgm --lut --stt --slowmo`
+  - `vidance.py` 加 `fast` 子命令：`python core/vidance.py fast "概念" [--images dir] [--images-source crawl|flux] -n N --voice --bgm --lut --stt --slowmo`
+- **图片来源可切换**：`--images-source crawl`(必应爬图，默认) / `flux`(FLUX 逐段文生图，`_gen_flux_images()` 用每段旁白当 prompt，质量可控不依赖爬网)
+- **RIFE 慢动作**：`--slowmo N` 用 `RIFEClient.slowmo` 另出 `final_slow.mp4`（视频-only），**原片 `final.mp4` 恒保留**（两版并存）
 - 端到端验证（全链路各分支）：
   - `fast "赛博朋克霓虹雨夜的机械狐狸" -n 3`：3 关键词→必应爬 3 图→3 段旁白+TTS→Ken Burns→crossfade→9.1s 成片，55s 完成（含爬网）
+  - `fast "雪山黎明时的日出与安静湖面" --images-source flux -n 2`：FLUX 逐段生 2 图→Ken Burns+TTS+BGM→7.2s 成片，39s 完成
   - 自供图（--images）2 段：LLM 旁白+TTS+zoompan 全通；auto LUT（warm）+ auto BGM（calm 取 custom_dir）自动选择
   - `--bgm epic`（custom_dir bgm/epic.wav）+ `--lut warm` 生效
   - `--stt`：faster-whisper 转写→烧录 STT 字幕（2 段，时间戳正确）
-  - `--slowmo 2`：RIFE 插帧 36→71 帧（小样验证），输出有效
+  - `--slowmo 2`：RIFE 插帧 7.2s→14.4s，`final.mp4` 原片 + `final_slow.mp4` RIFE 版并存（RIFE 版视频-only，无音轨——helper 仅重编码画面）
   - **修正**：`--bgm` choices 原限 5 种，加 `epic`（bgm/epic.wav 已存在）；"RIFE 组成视频"指 zoompan 动效（本就 24fps 平滑），`--slowmo` 为可选 RIFE 增强，均跳过 Wan/I2V 视频模型

@@ -180,6 +180,46 @@ def cmd_concat(args):
     print(f'\nDone: {output_path} ({float(dur):.1f}s)')
 
 
+def cmd_hot(args):
+    """hot 子命令：爬热点 → LLM scout 选题 → fast 出片（一步到位，固定流程）"""
+    from utils.crawler import Crawler
+    from datetime import datetime
+
+    fl = FastLine()
+    llm = fl.llm
+
+    # 1) 爬实时热点
+    print('=== [hot] 爬实时热点 ===')
+    topics = Crawler().fetch_hot_topics(top_per_source=args.top_each)
+
+    # 2) LLM 自动选题
+    print(f'=== [hot] LLM scout 选题 ===')
+    cands = llm.scout_topics(topics, account_type=args.account, n_candidates=args.n_cand)
+    for c in cands:
+        print(f'  [{c.get("predicted_score")}] {c.get("concept")}')
+    top = cands[0]
+    source = top.get('source_topic', '')
+    date = datetime.now().strftime('%Y-%m-%d')
+    print(f'选中: {top["predicted_score"]}分 | 源自: {date}: {source}')
+
+    # 3) fast 出片
+    meta = fl.run(
+        top['concept'],
+        images_source=args.images_source,
+        n=args.images_count,
+        voice=args.voice,
+        bgm_override=args.bgm,
+        lut_override=args.lut,
+        use_stt=args.stt,
+        slowmo=args.slowmo,
+        source_topic=source,
+        trend_date=date,
+        show_source=not args.no_source,
+        task_id=args.task_id,
+    )
+    print(f'\nDone: {meta["output"]}')
+
+
 def cmd_fast(args):
     """fast 子命令：图片 + 运镜动效组成视频，跳过视频模型（v4 M6 快速链路）"""
     fl = FastLine()
@@ -189,7 +229,9 @@ def cmd_fast(args):
         motion=args.motion, seconds=args.seconds, task_id=args.task_id,
         no_rife=args.no_rife, lut_override=args.lut, no_color=args.no_color,
         bgm_override=args.bgm, no_bgm=args.no_bgm, use_stt=args.stt,
-        slowmo=args.slowmo,
+        slowmo=args.slowmo, images_source=args.images_source,
+        source_topic=args.source_topic, trend_date=args.trend_date,
+        show_source=not args.no_source,
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -276,12 +318,46 @@ def build_parser():
                           help='交叉淡化时长（秒，仅 --transition crossfade 时生效）')
     p_concat.set_defaults(func=cmd_concat)
 
+    # ── hot 子命令（爬热点→选题→出片，一步到位） ──
+    p_hot = sub.add_parser('hot', parents=[output_parent],
+                           help='爬实时热点 → LLM scout 选题 → fast 出片（固定流程，一步到位）')
+    p_hot.add_argument('-n', '--images-count', type=int, default=5,
+                       help='图片/段落数（默认 5）')
+    p_hot.add_argument('--top-each', type=int, default=10,
+                       help='每个来源抓取热点条数（默认 10）')
+    p_hot.add_argument('--n-cand', type=int, default=6,
+                       help='scout 候选数（默认 6）')
+    p_hot.add_argument('--account', default='热门资讯',
+                       help='账号定位（默认 热门资讯，可改 影视解说/萌宠/情感 等）')
+    p_hot.add_argument('--images-source', default='crawl',
+                       choices=['crawl', 'flux'],
+                       help='图片来源: crawl(爬图+相关性校验，默认) / flux(FLUX 文生图)')
+    p_hot.add_argument('--voice', default=None, help='TTS 音色')
+    p_hot.add_argument('--bgm', default=None, help='BGM mood')
+    p_hot.add_argument('--lut', default=None, help='LUT 风格')
+    p_hot.add_argument('--stt', action='store_true', help='STT 字幕对齐')
+    p_hot.add_argument('--slowmo', type=int, default=None,
+                       help='RIFE 慢放帧倍率（另出 final_slow.mp4，原片保留）')
+    p_hot.add_argument('--no-source', action='store_true',
+                       help='不烧录热搜来源角标')
+    p_hot.add_argument('--task-id', default=None)
+    p_hot.set_defaults(func=cmd_hot)
+
     # ── fast 子命令（v4 M6 快速营销号链路） ──
     p_fast = sub.add_parser('fast', parents=[output_parent],
                             help='图片+运镜动效组成视频，跳过视频模型（快速营销号链路）')
     p_fast.add_argument('concept', help='热点概念/旁白主题（中文）')
     p_fast.add_argument('--images', default=None,
-                        help='图片目录（有图则用，否则必应爬取关联图）')
+                        help='图片目录（有图则用，否则按 --images-source 出图）')
+    p_fast.add_argument('--images-source', default='crawl',
+                        choices=['crawl', 'flux'],
+                        help='图片来源: crawl(必应爬图，默认) / flux(FLUX 文生图)')
+    p_fast.add_argument('--source-topic', default=None,
+                        help='对应热搜标题（写进 meta + 片头水印，便于验证真实性）')
+    p_fast.add_argument('--trend-date', default=None,
+                        help='热搜日期（如 2026-09-14，默认今天；写进 meta + 片头）')
+    p_fast.add_argument('--no-source', action='store_true',
+                        help='不烧录热搜来源水印')
     p_fast.add_argument('-n', '--images-count', type=int, default=5,
                         help='图片/段落数（默认 5）')
     p_fast.add_argument('--voice', default=None, help='TTS 音色')
