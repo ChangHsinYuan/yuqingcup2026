@@ -272,7 +272,7 @@
 
 **详细设计**：见 [v3-design.md](./v3-design.md)（M0+M1+M2+M3+M4+M5+M6+M7 完成，角色双路径+资产库+端到端打通）
 
-### v4 — 营销号流水线（🚧 M1+M2+M3+M4+M5 完成，M6-M7 待开始；发布不做，人精选手动上传）
+### v4 — 营销号流水线（🚧 M1+M2+M3+M4+M5 完成 + M6 快速链路设计；发布不做，人精选手动上传）
 
 **目标**：批量自动化内容生产（发布由人工精挑细选，手动上传）。
 
@@ -282,12 +282,62 @@
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索+yt-dlp下载+VAD切段+STT转写+音色注册+测试合成）+ TTS server `POST /voices/reload` 热加载 + API `POST /api/clone_voice` 异步端点。端到端验证：3 音色全通（xinwen1 新闻播音/jieshuo1 影视解说/jilupian1 纪录片，单音色 21-30s），STT 转写回验一致
 - **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR 转写+字级时间戳+字级聚合成句+ffmpeg 时段裁剪+LLM 语义 keep/drop）+ 三子命令 CLI（transcribe/clip/smart）。GPU 修复：满卡连 CUDA context 都建不出来，`device='auto'` 逐卡探测跳满卡。端到端验证：4 句剧本拼 12.6s 长音频，"只要讲光的句子" → LLM 保留 2 句 drop 2 句，输出 3.88s 回验一致
 - **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 搜图下载+magic bytes 校验+md5 去重+LLM concept→关键词+incompetech BGM 按 feel 搜曲 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。端到端验证："雪山上的日出小狐狸"→3 关键词→6 张参考图；`bgm epic` → epic.wav（61.4s loudnorm）
-- M6 批量端到端联调
-- M7 无人值守批量生产验证
+- **M6 快速营销号链路**（设计）：`utils/fastline.py` + `vidance.py fast` 子命令——爬热点/选图 → ffmpeg zoompan 运镜 → RIFE 插帧 → TTS+字幕+BGM，**跳过视频模型**分钟级出片。见 v4-design.md §3.6
+- ~~M7 批量端到端联调 / M8 无人值守~~：经确认跳过（单任务全链路已验证即算达标；发布由人精挑细选）
 
 **新增依赖**：feedparser ✅、yt-dlp ✅、bs4+lxml ✅、fastapi+uvicorn ✅、funasr ✅
 
-**详细设计**：见 [v4-design.md](./v4-design.md)（🚧 M1+M2+M3+M4+M5 完成，M6-M7 待开始）
+**详细设计**：见 [v4-design.md](./v4-design.md)（M1-M5 ✅ + M6 快速链路设计；批量/无人值守降级跳过）
+
+---
+
+### v5 — 剪辑特效包（🎯 待开发）
+
+> 用户编号 v6。文件 docs/v5-design.md。
+
+**目标**：丰富单镜头内/镜头间剪辑表现力，营销号更抓眼球。
+
+**范围**：`utils/effects.py`（纯 ffmpeg filter 封装）+ `llm.select_effects()` 自动选 + `--effects auto`：
+- 闪白 / 闪黑（闪回）、zoom punch-in、glitch 故障、胶片颗粒 + vignette、speed ramp 变速、定格放大、甩镜 wipes
+- xfade 内置 30 种转场（slide/wipe/radial/pixelize/hblur...）接入 concat/镜头间
+
+**里程碑**：M1 特效库 → M2 LLM 自动选 → M3 pipeline 集成 → M4 端到端
+
+---
+
+### v6 — prompt 多轮核实（🎯 待开发）
+
+> 用户编号 v7。文件 docs/v6-design.md。
+
+**目标**：prompt 信息不全时打回，多轮对话核实用户详细需求，避免"不是很清楚就硬做"。
+
+**范围**：LLM 完整度评估（主体/场景/情绪/风格/时长/镜头感 6 维）→ 不足打回多轮对话（≤3 轮防死循环）→ CLI `ask`/`--interactive` + API `POST /api/dialog/start` + `/{id}/reply`（供 v7 前端用）。不做自动补全。
+
+**里程碑**：M1 完整度评估 → M2 对话状态机 → M3 API → M4 集成
+
+---
+
+### v7 — 前端（🎯 待开发）
+
+> 用户编号 v8。文件 docs/v7-design.md。
+
+**目标**：Web 界面，摆脱纯 CLI，营销号运营看得见、点得动。
+
+**范围**：自包含 HTML+vanilla JS（FastAPI 静态服务，零 npm 构建链）：任务表单/列表/详情轮询、成片画廊（video 播放器+审片分）、v6 对话 UI、选题克隆入口；新增 `GET /api/video/{task_id}` + `GET /api/options`。
+
+**里程碑**：M1 静态服务 → M2 任务 CRUD 页 → M3 成片画廊 → M4 对话 UI
+
+---
+
+### v8 — 一镜到底（🎯 待开发）
+
+> 用户编号 v9。文件 docs/v8-design.md。
+
+**目标**：突破单镜 ≤5s（Wan 121 帧上限）限制，实现 30s+ 连续性镜头。
+
+**范围**：链式 I2V（段 N 末帧 → 段 N+1 首帧条件，拼缝隐形式）+ LLM 连续运镜脚本 + 漂移控制（每段重注入角色锚）+ `--oneshot --duration N`。不做真·无限长（显存限制）。
+
+**里程碑**：M1 末帧回灌 → M2 运镜脚本 → M3 漂移控制 → M4 端到端 30s
 
 ---
 
@@ -384,7 +434,11 @@ vidance/
 │   ├── v2.5-design.md         # v2.5 多入口架构+H3引擎接入（✅ 已完成）
 │   ├── deployed-models.md     # 已部署模型清单
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（✅ M0-M7 完成，M8 跳过）
-│   ├── v4-design.md           # v4 营销号流水线设计（🚧 M1 完成，M2-M8 待开始）
+│   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M5 完成 + M6 快速链路设计）
+│   ├── v5-design.md           # v5 剪辑特效包（用户编号 v6，🎯 待开发）
+│   ├── v6-design.md           # v6 prompt 多轮核实（用户编号 v7，🎯 待开发）
+│   ├── v7-design.md           # v7 前端（用户编号 v8，🎯 待开发）
+│   ├── v8-design.md           # v8 一镜到底（用户编号 v9，🎯 待开发）
 │   ├── hierachy.md
 │   ├── tech.md
 │   └── experience.md

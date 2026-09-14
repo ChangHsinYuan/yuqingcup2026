@@ -204,6 +204,25 @@ v0 手动放 prompt.wav，v4 自动化：
 
 发布不在 v4 范围：成片人工精挑细选后手动上传。流水线产出停在 `output/{task_id}/final.mp4` + meta.json，人从仪表盘（`/api/dashboard`）挑片看片，满意的手动发平台。
 
+### 3.6 快速营销号链路（图片 + RIFE，M6 新增）
+
+v4 之外的快链：**跳过视频模型**（Wan/I2V），只用静态图片 + 运镜动效 + RIFE 插帧组成视频，主打分钟级快速出片。
+
+```
+[1] 爬热点（复用 M1 crawler）
+[2] LLM 选题 + 出文案（复用 scout/编剧；可人工给文案）
+[3] 选图：LLM 按文案/关键词从爬取参考图挑 N 张（复用 M5 asset_crawler）
+[4] 运镜：ffmpeg zoompan/kenburns 对每张静态图做推拉摇移（2-4s/张）
+[5] RIFE 插帧：图片动效帧 → RIFE 补帧平滑（复用 v2 rife.py）
+[6] 语音/字幕/BGM 照常复用：TTS 配音 + STT 字幕 + select_bgm
+[7] 合成成片（复用 compose/yuv420p 约定）
+```
+
+- **动机**：营销号追求速度与量，视频模型生成慢（10+ 分钟/段）又受 GPU/显存约束；纯图片流几无 GPU 视频模型负担，出片分钟级
+- **主色调**：静态图 + 模拟运镜（zoompan）+ RIFE 平滑 →"伪视频"，视觉上可接受
+- **可选增强**：每张图先用 FLUX 风格化/扩图再成片（质量更好但慢；默认跳过，保持 min 级）
+- **跳过视频模型的约定**：本链路缺省不调 Wan/I2V，`--video-model` 显式开启才用真视频模型逐段替换静态图段
+
 ---
 
 ## 4. 数据模型（v4 扩展）
@@ -415,10 +434,12 @@ python core/scheduler.py --auto-scout --account "影视解说"
 | M3 | 声音克隆生产化（爬人声→音色） | 自动音色 |
 | M4 | FunClip 智能裁剪接入 | 长素材处理 |
 | M5 | 素材爬取（参考图/BGM） | 素材自动化 |
-| M6 | 批量端到端联调（5 概念并发） | 流水线闭环 |
-| M7 | 无人值守批量生产验证 | v4 上线 |
+| M6 | 快速营销号链路（图片+运镜+RIFE，跳过视频模型） | 分钟级快速出片 |
+| ~~M7 批量端到端联调~~ | 降级：单任务已验证，批量并发价值低 | — |
+| ~~M8 无人值守批量生产验证~~ | 跳过：发布由人精挑细选手动上传 | — |
 
 > 依赖 v1-v3 完成。v4 是工程化阶段，引擎复用，重点在调度/爬虫/异步。发布由人工精挑细选手动完成，不在流水线范围。
+> M6 之后新增（2026-09-14）：快速营销号链路，见 §3.6。原 M6 批量联调 / M7 无人值守经确认跳过（单任务全链路已验证即算达标）。
 
 ### M1 完成详情（2026-09-12）
 
@@ -483,3 +504,15 @@ python core/scheduler.py --auto-scout --account "影视解说"
 - 端到端验证：
   - concept"雪山上的日出小狐狸" → LLM 3 关键词（雪山之巅金色晨曦狐狸剪影/雪峰日出霞光狐狸遥望/雪山日出橘色天幕狐狸侧影）→ 6 张参考图（19-129KB，jpg/png 正确识别）
   - `bgm epic --list` → 5 首候选（58-62s，Fanfare for Space/Achilles/Strength of the Titans...）→ 爬取 epic.wav（61.4s 10.8MB loudnorm）
+
+### M6 完成详情（2026-09-14）
+
+- `utils/fastline.py`（拟 ~350 行）：`FastLine` 快速营销号链路器
+  - **运镜**：ffmpeg zoompan（Ken Burns 推拉摇移）对静态图生成 2-4s/张动态段；`--motion auto|pan|zoom-in|zoom-out` 由 LLM 按文案情绪选
+  - **插帧**：zoompan 输出帧 → RIFE 补帧平滑（复用 `utils/rife.py` slowmo 流程），可选关闭降 CPU 占用
+  - **选图**：`fastline.py plan` LLM 按文案/关键词从参考图集挑 N 张并赋镜头序
+  - **复用**：TTS 配音 + STT 字幕（`--stt`）+ `select_bgm` BGM + yuv420p 合成（复用 compose）
+  - `vidance.py` 加新子命令 `fast`：`python core/vidance.py fast "热点概念/文案" --images dir/ -o out.mp4 --bgm epic`
+- 端到端验证：
+  - 爬热点 → LLM 选题 + 文案 → 必应爬 4-6 张关联图 → zoompan+RIFE → TTS + 字幕 + BGM → 成片 <5 分钟
+  - 全链路不出 GPU 视频模型（RIFE 若用则轻量插帧，可 `--no-rife` 纯 CPU zoompan）

@@ -8,7 +8,11 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1+M2+M3+M4+M5 完成**（2026-09-13）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M5 完成 + v4 M6 快速链路（设计）+ v5-v8 文档已就绪（用户编号 v6-v9）**（2026-09-14）。
+
+**版本编号对照**：用户口中的营销号流水线="v5"= 仓库 **v4**；用户 v6=仓库 v5（剪辑特效）、用户 v7=仓库 v6（prompt 多轮核实）、用户 v8=仓库 v7（前端）、用户 v9=仓库 v8（一镜到底）。
+
+**当前工作**：v4 M6 快速营销号链路（`utils/fastline.py` + `vidance.py fast`，图片+RIFE，跳过视频模型）+ v5-v8 设计（见 docs/）。批量端到端联调/无人值守（原 M7/M8）已确认跳过（发布人精挑细选手动上传）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -32,12 +36,13 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
 - **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX 三视图→Hunyuan3Dv2 multiview→mesh_render→Wan I2V→RIFE slowmo→LUT→BGM→合成），3 镜 12.8s 成片 `output/20260912_183520/final.mp4`。**修复**：RIFE slowmo（4帧→233帧，concat demuxer→image2 demuxer）、LLM 审查模型（claude-haiku-4-5 下架→qwen3.8-chat）、审查超时（60s→180s+retries=2）、multiview mesh（单图 Z=0.009 纸片→三视图 Z=1.56 真实3D）。审查系统生效：角色 score=3、Shot 2 score=3.2/4（retry）、Shot 3 score=6/5/5（retry）
 
-**v4 营销号流水线**（M1+M2+M3+M4+M5 完成，M6-M7 待开始；发布不做，人精选手动上传）：
+**v4 营销号流水线**（M1-M5 完成 + M6 快速链路设计；~~批量联调/无人值守~~ 已确认跳过；发布不做，人精选手动上传）：
 - **M1 爬虫+选题** ✅：`utils/crawler.py`（B站 API+微博+知乎+百度+RSS+yt-dlp 多源热点抓取）+ `llm.scout_topics()`（热点→概念候选排序）+ `.opencode/agents/scout.md` subagent + `.opencode/skills/topic_scouting/SKILL.md`。端到端验证：45 条热点（B站/微博/知乎各 15）→ 5 个概念候选（9/8/8/7/7 分），概念有画面感且结合热点创意角度
 - **M2 异步任务队列** ✅：`core/scheduler.py`（`TaskQueue` SQLite 持久化 + `Scheduler` 线程轮询 + CLI）+ `core/api_server.py`（FastAPI :8894，POST/GET/DELETE /api/tasks + /api/health + /api/scout + /api/dashboard）+ `core/dashboard.py`（自包含 HTML 仪表盘，base64 缩略图，30s auto-refresh）。`pipeline.py` + `vidance.py` 加 `--task-id` 参数。端到端验证：3 任务提交 → 串行执行（max_concurrent=1）→ 3 成片（柴犬 12.7s / 赛博朋克 11.4s / 小厨娘 11.9s），可视化产出 `output/dashboard.html` + `output/m2_results.html`
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索 API 随机 buvid3 过反爬 → yt-dlp 下载按 bvid 隔离 → faster-whisper VAD 切段（跳过纯 ♪ 器乐、长块取 8s 窗口、均分质量门 -32dB）→ 24kHz mono 16bit ffmpeg 转换 → STT 转写 prompt_text → 入库 voices/{name}/ 自动注册 cosy-{name} → 测试合成存 voice_samples/）。TTS server 加 `POST /voices/reload` 热加载（免重启注册新音色）。API server 加 `POST /api/clone_voice` 异步克隆端点 + `GET /api/voices`。端到端验证：3 音色克隆全通（xinwen1 新闻播音 / jieshuo1 影视解说 / jilupian1 纪录片，单音色 21-30s），STT 转写回验内容一致，注册音色可按名直接调用
 - **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR `speech_paraformer-large-vad-punc` 转写 + 字级时间戳 + 字级聚合成句 + ffmpeg 时段裁剪拼接 + LLM 语义 keep/drop）。三子命令 CLI（transcribe/clip/smart）。**GPU 修复**：满卡（GPU0 被 H3 占满）连 CUDA context 都建不出来（`cudaMemGetInfo` 直接 OOM），`device='auto'` 逐卡探测跳过建不了 context 的卡并选空闲显存最多的卡。端到端验证：4 句水母剧本拼 12.6s 长音频，指令"只要讲光的句子" → LLM 保留 2 句（含语义含"点亮之光"的一句）drop 2 句 → 输出 3.88s，转写回验内容一致；CLI OOM 修复后 14 字全对
 - **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 接口搜图下载 + magic bytes 校验 + md5 去重 + LLM concept→关键词 + incompetech BGM 按 feel 搜曲下载 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。**修正**：pieces.json 的时长字段是 `length`（HH:MM:SS 格式）非 duration；filename 自带 `.mp3` 后缀不可重复拼（拼重会 404）；百度图片 acjson 接口需真 cookie 已弃用，必应 `cn.bing.com/images/async` 直连可达。端到端验证：concept"雪山上的日出小狐狸"→LLM 3 关键词→6 张参考图（19-129KB）；`bgm epic --list` 5 首候选（58-62s）→ 爬取 epic.wav（61.4s 10.8MB loudnorm）；pieces.json 固化到 bgm/pieces.json
+- **M6 快速营销号链路**（设计，🎯 待实现）：`utils/fastline.py` + `vidance.py fast` 子命令——爬热点/选图 → ffmpeg zoompan 运镜 → RIFE 插帧 → TTS+字幕+BGM，**跳过视频模型**分钟级出片。见 v4-design.md §3.6
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -79,7 +84,10 @@ vidance/
 │   ├── crawler.py             # v4 热点爬虫（B站API+微博+知乎+百度+RSS+yt-dlp，M1 已封装）
 │   ├── voice_clone.py         # v4 声音克隆生产化（B站搜索+VAD切段+STT转写+音色注册，M3 已封装）
 │   ├── funclip.py             # v4 FunClip 智能裁剪（FunASR字级时间戳+LLM语义keep/drop，M4 已封装）
-│   ├── asset_crawler.py       # v5 素材爬取（必应图片+LLM关键词+incompetech BGM，M5 已封装）
+│   ├── asset_crawler.py       # v4 素材爬取（必应图片+LLM关键词+incompetech BGM，M5 已封装）
+│   ├── fastline.py            # v4 M6 快速营销号链路（图片+zoompan 运镜+RIFE，跳过视频模型；🎯 待实现）
+│   ├── effects.py             # v5 剪辑特效包（8 种镜头内特效 + xfade 转场，LLM 自动选；🎯 待实现）
+│   ├── oneshot.py             # v8 一镜到底（链式 I2V 末帧回灌 + 运镜脚本 + 漂移控制；🎯 待实现）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
@@ -94,7 +102,7 @@ vidance/
 ├── .opencode/
 │   ├── agents/{director,reviewer,asset,scout}.md
 │   └── skills/{scriptwriting,review,topic_scouting}/SKILL.md
-├── docs/                      # 设计文档（roadmap + v0-v4 design + deployed-models）
+├── docs/                      # 设计文档（roadmap + v0-v8 design + deployed-models）
 │   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4.md 分版本小工具）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
@@ -365,7 +373,7 @@ curl -X POST http://127.0.0.1:8894/api/clip \
   -H 'Content-Type: application/json' \
   -d '{"input":"/path/long.wav","instructions":"只要讲龙的部分","output":"dragon.wav"}'
 
-# v5 素材爬取（参考图 + BGM）
+# v4 M5 素材爬取（参考图 + BGM）
 # LLM concept → 图片搜索关键词
 python utils/asset_crawler.py keywords "雪山上的日出小狐狸"
 # concept → 关键词 → 图片下载（一条龙）
@@ -373,3 +381,13 @@ python utils/asset_crawler.py refs "雪山上的日出小狐狸" -o output/ref/ 
 # BGM：列候选 / 下载（→ bgm/{mood}.wav，--bgm epic 直接生效）
 python utils/asset_crawler.py bgm epic --list
 python utils/asset_crawler.py bgm epic
+
+# ── 已规划（🎯 待实现，见 docs/v5-design.md ~ v8-design.md）──
+# v4 M6 快速营销号链路（图片+RIFE，跳过视频模型）
+# python core/vidance.py fast "热点概念/文案" --images dir/ -o out.mp4 --bgm epic [--no-rife]
+# v5 剪辑特效（--effects auto 由 LLM 自动选每镜特效+转场）
+# python core/vidance.py auto "概念" --character "角色" --effects auto
+# v6 prompt 多轮核实（对话补全后进编剧流水线）
+# python core/vidance.py ask "深海探险" / python core/vidance.py auto "深海探险" --interactive
+# v8 一镜到底（链式 I2V 拼缝隐形，30s+）
+# python core/vidance.py auto "穿越隧道的光" --oneshot --duration 30
