@@ -1,7 +1,7 @@
 # Vidance v6 设计文档 — prompt 多轮核实
 
 > 仓库版本号 v6（紧接 v5 之后）。
-> 状态：🎯 待开发。目的：prompt 信息不全时打回，多轮对话核实用户详细需求。
+> 状态：🚧 M1-M2 完成（`llm.assess_completeness()` 6 维评估 + `utils/dialog.py` 状态机），M3(M3 CLI ask/--interactive)/M4(API) 待做。
 
 ---
 

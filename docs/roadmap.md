@@ -309,25 +309,32 @@
 
 ---
 
-### v6 — prompt 多轮核实（🎯 待开发）
+### v6 — prompt 多轮核实（🚧 M1-M2 完成，M3-M4 待做）
 
 
 **目标**：prompt 信息不全时打回，多轮对话核实用户详细需求，避免"不是很清楚就硬做"。
 
 **范围**：LLM 完整度评估（主体/场景/情绪/风格/时长/镜头感 6 维）→ 不足打回多轮对话（≤3 轮防死循环）→ CLI `ask`/`--interactive` + API `POST /api/dialog/start` + `/{id}/reply`（供 v7 前端用）。不做自动补全。
 
-**里程碑**：M1 完整度评估 → M2 对话状态机 → M3 API → M4 集成
+**进度**：
+- **M1 完整度评估** ✅：`llm.assess_completeness()` 6 维 + 缺失项 + 追问建议（异常兜底当 complete）
+- **M2 对话状态机** ✅：`utils/dialog.py`（DialogManager，OPEN/COLLECTING/COMPLETE/LOCKED，≤3 轮，SQLite `output/tasks.sqlite` dialogs 表）
+- M3 CLI `ask`/`--interactive` + 增强概念注入 ｜ M4 API 三端点
+
+**详细设计**：见 [v6-design.md](./v6-design.md)
 
 ---
 
 ### v7 — 前端（🎯 待开发）
 
 
-**目标**：Web 界面，摆脱纯 CLI，营销号运营看得见、点得动。
+**目标**：仿豆包/智象未来的对话式 agent WebUI——左功能边栏 + 顶部大画布 + 右下发框；支持 `/` 斜杠命令调用既有 tool。
 
-**范围**：自包含 HTML+vanilla JS（FastAPI 静态服务，零 npm 构建链）：任务表单/列表/详情轮询、成片画廊（video 播放器+审片分）、v6 对话 UI、选题克隆入口；新增 `GET /api/video/{task_id}` + `GET /api/options`。
+**范围**：自包含 HTML+vanilla JS（FastAPI 静态服务，零 npm）。对话消息 + `/` 命令补全（读 /api/tools → `POST /api/tool/{name}` 统一分发 auto/fast/hot/ask/clip/scout/voices/video）+ 画布内进度轮询与成片 video 卡片 + 画廊/历史。新端点 `GET /api/video/{task_id}`、`GET /api/options`、`GET /api/tools`、`POST /api/tool/{name}`。复用 v6 dialog、v4 tasks/dashboard/scout/clone_voice/clip。
 
-**里程碑**：M1 静态服务 → M2 任务 CRUD 页 → M3 成片画廊 → M4 对话 UI
+**里程碑**：M1 骨架（静态+三栏+端点）→ M2 对话+/命令补全+/api/tool → M3 轮询+画布 video 卡片 → M4 接 /ask + scout
+
+**详细设计**：见 [v7-design.md](./v7-design.md)（含布局图与 slash 命令表）
 
 ---
 
@@ -339,6 +346,19 @@
 **范围**：链式 I2V（段 N 末帧 → 段 N+1 首帧条件，拼缝隐形式）+ LLM 连续运镜脚本 + 漂移控制（每段重注入角色锚）+ `--oneshot --duration N`。不做真·无限长（显存限制）。
 
 **里程碑**：M1 末帧回灌 → M2 运镜脚本 → M3 漂移控制 → M4 端到端 30s
+
+---
+
+### v9 — 机器人网关（多 IM）（🎯 待开发）
+
+
+**目标**：把流水线接入聊天工具（企业微信 / 飞书 / 钉钉 / Slack / Telegram）——任务完成推送成片通知，可在 IM 里用 `/` 命令触发/查询。
+
+**范围**：`utils/notify/`（`Notifier` 抽象 + `wecom.py` 企微 / `feishu.py` 飞书 / `dingtalk.py` 钉钉 / 可选 slack/telegram + `factory.py` 多通道并发推送）；任务完成 post-hook 接入 v4 scheduler；回调网关 `POST /api/notify/{channel}/callback`（解密→文本→复用 v7 `/api/tool/{name}`）。config.json 加 `notify` 节。个人微信不做。
+
+**里程碑**：M1 base+wecom → M2 feishu/dingtalk+factory → M3 任务完成自动通知 → M4 回调网关（至少一个 IM）
+
+**详细设计**：见 [v9-design.md](./v9-design.md)（多网关抽象 + 各 IM 差异表）
 
 ---
 
@@ -435,11 +455,12 @@ vidance/
 │   ├── v2.5-design.md         # v2.5 多入口架构+H3引擎接入（✅ 已完成）
 │   ├── deployed-models.md     # 已部署模型清单
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（✅ M0-M7 完成，M8 跳过）
-│   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M5 完成 + M6 快速链路设计）
+│   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M6 完成）
 │   ├── v5-design.md           # v5 剪辑特效包（✅ M1-M4 完成）
-│   ├── v6-design.md           # v6 prompt 多轮核实（🎯 待开发）
-│   ├── v7-design.md           # v7 前端（🎯 待开发）
+│   ├── v6-design.md           # v6 prompt 多轮核实（🚧 M1-M2 完成，M3-M4 待做）
+│   ├── v7-design.md           # v7 前端 agent WebUI（🎯 待开发）
 │   ├── v8-design.md           # v8 一镜到底（🎯 待开发）
+│   ├── v9-design.md           # v9 机器人网关（多 IM：企微/飞书/钉钉…，🎯 待开发）
 │   ├── hierachy.md
 │   ├── tech.md
 │   └── experience.md

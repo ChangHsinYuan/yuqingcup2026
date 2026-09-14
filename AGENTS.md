@@ -8,9 +8,9 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6-v8 文档已就绪**（2026-09-14）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6 完成 M1-M2（6 维评估 + 对话状态机）+ v7/v8/v9 文档已就绪**（2026-09-14）。
 
-**当前工作**：v5 剪辑特效已完成（`utils/effects.py` 8 种镜头内特效 + xfade 转场 + `llm.select_effects` + `fast/hot --effects auto`）；下一步：v6-v8 设计与实现（见 docs/）。批量端到端联调/无人值守（原 M7/M8）已确认跳过（发布人精挑细选手动上传）。
+**版本路线**：v4 营销号流水线（fast/hot 爬图出片）→ v5 剪辑特效 → v6 prompt 多轮核实（进行中）→ v7 前端 agent WebUI（仿豆包，左栏+画布+发框+`/`命令调 tool）→ v8 一镜到底 → v9 机器人网关（企微/飞书/钉钉…）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -89,10 +89,12 @@ vidance/
 │   ├── crawler.py             # v4 热点爬虫（B站API+微博+知乎+百度+RSS+yt-dlp，M1 已封装）
 │   ├── voice_clone.py         # v4 声音克隆生产化（B站搜索+VAD切段+STT转写+音色注册，M3 已封装）
 │   ├── funclip.py             # v4 FunClip 智能裁剪（FunASR字级时间戳+LLM语义keep/drop，M4 已封装）
-│   ├── asset_crawler.py       # v4 素材爬取（必应图片+LLM关键词+incompetech BGM，M5 已封装）
+│   ├── asset_crawler.py       # v4 素材爬取（Pexels 图源首选 + 必应兜底 + LLM关键词 + incompetech BGM，M5 已封装）
 │   ├── fastline.py            # v4 M6 快速营销号链路（图片+zoompan 运镜+RIFE，跳过视频模型，M6 已封装）
 │   ├── effects.py             # v5 剪辑特效（8 种镜头内特效 + xfade 链式转场，M1-M4 已实现）
+│   ├── dialog.py              # v6 prompt 多轮核实状态机（DialogManager，SQLite，M1-M2 已实现）
 │   ├── oneshot.py             # v8 一镜到底（链式 I2V 末帧回灌 + 运镜脚本 + 漂移控制；🎯 待实现）
+│   ├── notify/                # v9 机器人网关（base/wecom/feishu/dingtalk/factory；🎯 待实现）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
@@ -107,7 +109,7 @@ vidance/
 ├── .opencode/
 │   ├── agents/{director,reviewer,asset,scout}.md
 │   └── skills/{scriptwriting,review,topic_scouting}/SKILL.md
-├── docs/                      # 设计文档（roadmap + v0-v8 design + deployed-models）
+├── docs/                      # 设计文档（roadmap + v0-v9 design + deployed-models）
 │   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4.md 分版本小工具）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
