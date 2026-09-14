@@ -2,7 +2,7 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1-v3 见对应 design 文档
 >
-> **状态：🚧 实现中**（M1+M2+M3+M4+M5 完成：爬虫+选题+异步任务队列+声音克隆生产化+FunClip 智能裁剪+素材爬取，M6-M7 待开始）
+> **状态：✅ 完成**（M1-M6 完成：爬虫+选题+异步任务队列+声音克隆生产化+FunClip 智能裁剪+素材爬取+快速营销号链路；~~批量联调/无人值守~~ 已确认跳过；发布不做，人工精挑细选）
 
 ## 1. 概述
 
@@ -514,13 +514,18 @@ python core/scheduler.py --auto-scout --account "影视解说"
   - **复用**：逐段 TTS 旁白；`compose()` crossfade 拼接 + 估算时间轴字幕；`PostProcessor.run_all()` 施加 LUT/BGM（自动 LLM 选或 override）+ 可选 STT
   - **慢动作**：`--slowmo N` 复用 RIFEClient.slowmo（GPU2 可选，默认关）
   - `vidance.py` 加 `fast` 子命令：`python core/vidance.py fast "概念" [--images dir] [--images-source crawl|flux] -n N --voice --bgm --lut --stt --slowmo`
+  - `vidance.py` 加 `hot` 子命令（固定流程一步到位）：爬实时热点 → LLM scout 自动选题（最高分）→ fast 出片；自动写 `source_topic`/`trend_date` + 片头热搜角标
 - **图片来源可切换**：`--images-source crawl`(必应爬图，默认) / `flux`(FLUX 逐段文生图，`_gen_flux_images()` 用每段旁白当 prompt，质量可控不依赖爬网)
-- **RIFE 慢动作**：`--slowmo N` 用 `RIFEClient.slowmo` 另出 `final_slow.mp4`（视频-only），**原片 `final.mp4` 恒保留**（两版并存）
+- **爬图+相关性校验**：crawl 下载后用 `llm.assess_image_relevance()`（多模态）逐张判与概念相关，不相关自动删、不足用 FLUX 补足（防止图/旁白错位）
+- **FLUX 生图质量门**（2026-09-14 修复）：①`llm.optimize_fastline_prompt()` 把中文旁白翻成**英文 FLUX prompt**（忠实保留主体，修"直接塞中文导致语义偏差生成无关图"）；②生成后用 `assess_image_relevance` 审核是否贴合该段旁白，不通过换 seed 重生成（≤2 次）。实测："夕阳下旅行青蛙背包旅行的剪影" → 翻译英文 → FLUX 生图 → 审核 score=10 通过，复核确为背包青蛙剪影；hot 实例"程序员一条代码删掉89TB数据获刑"3 图全过（9/7/9）
+- **热搜来源角标**：`--source-topic`+`--trend-date` 写进 meta + 片头顶部 drawtext 角标（`_overlay_source`，独立于字幕时间轴，不造成字幕/声音错位）
+- **RIFE 慢动作**：`--slowmo N` 用 `RIFEClient.slowmo` 另出 `final_slow.mp4`（视频-only，helper 仅重编码画面故无音轨），**原片 `final.mp4` 恒保留**（两版并存）
 - 端到端验证（全链路各分支）：
   - `fast "赛博朋克霓虹雨夜的机械狐狸" -n 3`：3 关键词→必应爬 3 图→3 段旁白+TTS→Ken Burns→crossfade→9.1s 成片，55s 完成（含爬网）
   - `fast "雪山黎明时的日出与安静湖面" --images-source flux -n 2`：FLUX 逐段生 2 图→Ken Burns+TTS+BGM→7.2s 成片，39s 完成
+  - `hot`（爬热点→scout→fast）：auto 选"旅行青蛙停运"9 分，"程序员删89TB"（新版 3 图全过审核门）10.6s 成片
   - 自供图（--images）2 段：LLM 旁白+TTS+zoompan 全通；auto LUT（warm）+ auto BGM（calm 取 custom_dir）自动选择
   - `--bgm epic`（custom_dir bgm/epic.wav）+ `--lut warm` 生效
   - `--stt`：faster-whisper 转写→烧录 STT 字幕（2 段，时间戳正确）
-  - `--slowmo 2`：RIFE 插帧 7.2s→14.4s，`final.mp4` 原片 + `final_slow.mp4` RIFE 版并存（RIFE 版视频-only，无音轨——helper 仅重编码画面）
-  - **修正**：`--bgm` choices 原限 5 种，加 `epic`（bgm/epic.wav 已存在）；"RIFE 组成视频"指 zoompan 动效（本就 24fps 平滑），`--slowmo` 为可选 RIFE 增强，均跳过 Wan/I2V 视频模型
+  - `--slowmo 2`：RIFE 插帧 7.2s→14.4s，`final.mp4` 原片 + `final_slow.mp4` RIFE 版并存
+  - **修正**：①`--bgm` choices 加 `epic`；②FLUX 生图 P 模式/PIL `_image_to_base64` 支持 RGBA/P/LA/PA 转 RGB（修 `cannot write mode P as JPEG`）；③"RIFE 组成视频"指 zoompan 动效（本就 24fps 平滑），`--slowmo` 为可选 RIFE 增强，均跳过 Wan/I2V 视频模型

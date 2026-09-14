@@ -116,32 +116,22 @@ class FastLine:
 
         imgs = []
         if images_source == 'crawl':
-            print(f'  [crawl] 为概念爬参考图（目标 {n} 张，+相关性校验）...')
-            # 多爬一些候选（top*3），用多模态 LLM 过滤不相关图，防止图/旁白错位
-            items = self.crawler.crawl_concept_refs(concept, save_dir,
-                                                    top=min(n * 3, 12), llm=self.llm)
-            cands = []
-            for it in items:
-                path = it['path']
-                rel = self.llm.assess_image_relevance(path, concept)
-                mark = '✅' if rel['pass'] else '✗'
-                print(f"  [filter] {mark} 图 {os.path.basename(path)[:24]} score={rel['score']} {rel['reason'][:30]}")
-                if rel['pass']:
-                    cands.append(path)
-                else:
-                    os.remove(path)  # 不相关图直接删，避免混用
-            imgs = cands
-            print(f'  [crawl] 相关图 {len(imgs)}/{len(items)} 张')
+            # Pexels 图源（首选，精准对题且已 md5 去重）——直接取 n 张，无需逐张慢速多模态校验，
+            # 总数严格 ≤ n，速度快。
+            print(f'  [crawl] 为概念取参考图（目标 {n} 张，Pexels 图源）...')
+            items = self.crawler.download_images(concept, save_dir, top=n)
+            imgs = [it['path'] for it in items]
+            print(f'  [crawl] 取到 {len(imgs)} 张')
             if len(imgs) < n:
                 lack = n - len(imgs)
-                print(f'  [topup] 相关图不足，用 FLUX 补齐 {lack} 张')
+                print(f'  [topup] 图源不足，用 FLUX 补齐 {lack} 张')
                 imgs += self._gen_flux_images(concept, lack, save_dir, segments=segments)
         else:  # 'flux'
             imgs = self._gen_flux_images(concept, n, save_dir, segments=segments)
 
         if not imgs:
             raise RuntimeError('图片获取失败，请 --images 自行提供或检查网络/8192')
-        return _pad_list(imgs, n)
+        return _pad_list(imgs, n)[:n]
 
     def _gen_flux_images(self, concept, n, save_dir, segments=None,
                          max_retry=2) -> list:
@@ -235,7 +225,7 @@ class FastLine:
             task_id=None, no_rife=False, no_color=False, bgm_override=None,
             no_bgm=False, use_stt=False, lut_override=None, slowmo=None,
             images_source='crawl', source_topic=None, trend_date=None,
-            show_source=True) -> dict:
+            show_source=True, effects='off') -> dict:
         """一键出片。返回 meta。
 
         images_source: 'crawl'(必应爬图，默认，不足时 FLUX 补足) / 'flux'(纯 FLUX 文生图)。
@@ -287,6 +277,21 @@ class FastLine:
             clips.append(c)
             audios.append(a)
             wait_tts = True
+
+        # 3.5) v5 剪辑特效：--effects auto 由 LLM 选每镜特效并施加
+        fx_meta = {'effects': ['none'] * len(clips), 'transitions': []}
+        if effects == 'auto':
+            print(f'\n=== [v5] 剪辑特效（LLM 自动选）===')
+            from utils.effects import apply_effects_to_clips
+            pseudo = {'title': concept, 'shots': [
+                {'id': i + 1, 'scene_desc': s['text'], 'emotion': ''}
+                for i, s in enumerate(segments)]}
+            plan = self.llm.select_effects(pseudo, None, None)
+            effs = plan['shots'][:len(clips)]
+            fx_dir = os.path.join(clips_dir, 'fx')
+            clips = apply_effects_to_clips(clips, fx_dir, effs)
+            fx_meta['effects'] = effs
+            fx_meta['transitions'] = plan['transitions']
 
         # 4) 合成原始视频（含字幕，非 STT 用估算时间轴）
         print(f'\n=== [fast] 合成成片 ===')
@@ -345,6 +350,8 @@ class FastLine:
             'images': images,
             'source_topic': source_topic,
             'trend_date': trend_date,
+            'effects': fx_meta['effects'],
+            'transitions': fx_meta['transitions'],
             'output': out,
             'slowmo_path': slow_path,
             'duration': _video_duration(out),

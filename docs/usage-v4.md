@@ -557,9 +557,11 @@ python core/vidance.py hot --images-source flux           # FLUX 出图（更快
 `python core/vidance.py hot` 一条命令完成：crawler 爬实时热点 → LLM scout 自动选题（最高分）→ fast 出片。成片自动带：
 
 - **图片相关性校验**：`--images-source crawl`（默认）对每张爬图用多模态 LLM 判相关性，不相关的自动删除，不足用 FLUX 补足（防止图/旁白错位）
+- **FLUX 生图质量门**（`--images-source flux`）：旁白先翻成英文 FLUX prompt（`optimize_fastline_prompt`），生成后再用多模态 LLM 审核是否贴合该段旁白，不过重生成≤2 次（防止驴唇不对马嘴）
 - **热搜来源角标**：片头顶部 drawtext 叠加 `{日期} 热搜: {热点标题}`（独立于字幕，不造成字幕/声音错位），并写入 meta.json 的 `source_topic`/`trend_date` 供核对
 - `--no-source` 可去掉角标；`--slowmo` 另出 RIFE 慢放版（原片保留）
-```
+
+`hot` 额外参数：`--top-each N`(每源抓取条数，默认10)、`--n-cand N`(scout 候选数，默认6)、`--account"xxx"`(账号定位，默认"热门资讯")。
 
 ### 参数
 
@@ -567,11 +569,12 @@ python core/vidance.py hot --images-source flux           # FLUX 出图（更快
 |------|------|
 | `concept` | 热点概念 / 旁白主题（中文） |
 | `--images dir/` | 图片目录（有图则用，否则按 `--images-source` 出图） |
-| `--images-source` | `crawl`(必应爬图+相关性校验，默认) / `flux`(FLUX 文生图) |
+| `--images-source` | `crawl`(必应爬图+相关性校验，默认) / `flux`(FLUX 生图，含英文 prompt 翻译+审核门) |
 | `--images-count/-n` | 图片/段落数（默认 5） |
 | `--source-topic` | 对应热搜标题（写进 meta + 片头角标，便于核对真实性） |
 | `--trend-date` | 热搜日期（如 2026-09-14，默认今天） |
 | `--no-source` | 不烧录热搜来源角标 |
+| `--effects` | v5 剪辑特效: `auto`(LLM 逐段选 flash/punch/glitch/颗粒/变速/定格/甩镜/推拉) / `off`(默认) |
 | `-n N` | 图片/段落数（默认 5） |
 | `--voice` | TTS 音色（默认 config `edge-moe`） |
 | `--motion` | 统一运镜 pan/zoom-in/zoom-out（默认 LLM 每段自选） |

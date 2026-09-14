@@ -1,4 +1,7 @@
 {
+  "pexels": {
+    "api_key": "F5CXcrHXGjKi2ap4msh6hi8CITKYsP0TJzwrWtbCXm2CgNWJX30oWw6W"
+  },
   "llm": {
     "base_url": "https://api.llm.ustc.edu.cn/v1",
     "api_key": "sk-M4b0y-Euavlan2tL6ZcWfA",

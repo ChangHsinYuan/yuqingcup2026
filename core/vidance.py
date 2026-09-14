@@ -216,6 +216,7 @@ def cmd_hot(args):
         trend_date=date,
         show_source=not args.no_source,
         task_id=args.task_id,
+        effects=getattr(args, 'effects', 'off'),
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -231,7 +232,7 @@ def cmd_fast(args):
         bgm_override=args.bgm, no_bgm=args.no_bgm, use_stt=args.stt,
         slowmo=args.slowmo, images_source=args.images_source,
         source_topic=args.source_topic, trend_date=args.trend_date,
-        show_source=not args.no_source,
+        show_source=not args.no_source, effects=getattr(args, 'effects', 'off'),
     )
     print(f'\nDone: {meta["output"]}')
 
@@ -340,6 +341,9 @@ def build_parser():
                        help='RIFE 慢放帧倍率（另出 final_slow.mp4，原片保留）')
     p_hot.add_argument('--no-source', action='store_true',
                        help='不烧录热搜来源角标')
+    p_hot.add_argument('--effects', default='off',
+                       choices=['auto', 'off'],
+                       help='v5 剪辑特效: auto(LLM 选) / off(关闭，默认)')
     p_hot.add_argument('--task-id', default=None)
     p_hot.set_defaults(func=cmd_hot)
 
@@ -358,6 +362,9 @@ def build_parser():
                         help='热搜日期（如 2026-09-14，默认今天；写进 meta + 片头）')
     p_fast.add_argument('--no-source', action='store_true',
                         help='不烧录热搜来源水印')
+    p_fast.add_argument('--effects', default='off',
+                        choices=['auto', 'off'],
+                        help='v5 剪辑特效: auto(LLM 逐段选特效) / off(关闭，默认)')
     p_fast.add_argument('-n', '--images-count', type=int, default=5,
                         help='图片/段落数（默认 5）')
     p_fast.add_argument('--voice', default=None, help='TTS 音色')

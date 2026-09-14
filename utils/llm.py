@@ -383,6 +383,104 @@ class LLMClient:
                 return mood
         return available_moods[0]
 
+    def select_effects(self, script: dict, available_effects: list,
+                       available_transitions: list) -> dict:
+        """LLM 自动选每镜特效 + 镜头间转场（v5）。
+
+        Args:
+            script: 编剧脚本 dict（含 title, shots，每镜含 scene_desc/情绪）
+            available_effects: 可用镜头内特效列表
+            available_transitions: 可用 xfade 转场列表
+
+        Returns:
+            {'shots': [{'id':..,'effect':..}, ...], 'transitions': [kind, ...]}
+            shots 长度 = 分镜数；transitions 长度 = shots-1
+        """
+        from utils.effects import EFFECTS, XFADE_KINDS
+        eff_options = ' '.join(sorted(EFFECTS if available_effects is None else available_effects))
+        tr_options = ' '.join(XFADE_KINDS if available_transitions is None else available_transitions)
+        shots = script.get('shots', [])
+        system = (
+            '你是剪辑师。根据每个分镜的内容和情绪，为每个镜头选一个镜头内特效（强调/情绪表达），'
+            '并为每两个镜头之间选一个 xfade 转场。\n'
+            f'特效可选: {eff_options}\n'
+            f'转场可选: {tr_options}\n'
+            '规则：平淡连贯的叙事镜尽量用 none；爆点/紧张用 punch_in/glitch/freeze_zoom；'
+            '闪回/回忆用 flash；情绪用 grain_vignette；进门/位移用 wipe；'
+            '转场首选 fade/slideleft/wipe 等简单自然的，少用炫技。\n'
+            '输出JSON：{"shots":[{"id":1,"effect":"none"}...],"transitions":["fade",...]}，'
+            'transitions 长度 = 镜头数-1。只输出JSON。'
+        )
+        shots_summary = '; '.join(
+            f"镜头{s.get('id')}:{s.get('scene_desc','')}|{s.get('emotion','')}" for s in shots)
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': f'标题:{script.get("title","")}\n{shots_summary}'},
+        ]
+        result = self.chat_json(messages, model=self.models['prompt_opt'],
+                                temperature=0.3, timeout=60, retries=1)
+        shots_eff, trans = [], []
+        sl = result.get('shots') if isinstance(result, dict) else None
+        for s in sl or []:
+            e = str(s.get('effect', 'none') or 'none')
+            if e not in EFFECTS:
+                e = 'none'
+            shots_eff.append(e)
+        tl = result.get('transitions') if isinstance(result, dict) else None
+        for k in tl or []:
+            trans.append(str(k) if str(k) in XFADE_KINDS else 'fade')
+        # 对齐长度
+        while len(shots_eff) < len(shots):
+            shots_eff.append('none')
+        shots_eff = shots_eff[:len(shots)]
+        while len(trans) < max(0, len(shots) - 1):
+            trans.append('fade')
+        return {'shots': shots_eff[:len(shots)], 'transitions': trans[:max(0, len(shots)-1)]}
+
+    def assess_completeness(self, prompt: str) -> dict:
+        """6 维完整度评估（v6）：判断概念是否信息齐全。
+
+        Returns:
+            {complete: bool, dimensions: {subject,spot,emotion,style,duration,shot: 0/1},
+             missing: [缺失项..], questions: [追问建议..]}
+            chat_json 解析，异常兜底当 complete（不阻塞流水线）。
+        """
+        dims = ['subject', 'scene', 'emotion', 'style', 'duration', 'shot']
+        dim_cn = {
+            'subject': '主体/主角', 'scene': '场景/环境', 'emotion': '情绪基调',
+            'style': '视觉风格', 'duration': '目标时长', 'shot': '镜头感/运镜',
+        }
+        system = (
+            '你是短视频需求澄清助理。判断用户给的概念在 6 个维度上是否信息足够，列出缺失项和需要追问的问题。\n'
+            '维度：subject(主体/主角)、scene(场景/环境)、emotion(情绪基调)、'
+            'style(视觉风格)、duration(目标时长)、shot(镜头感/运镜)。\n'
+            '规则：\n'
+            '- subject/scene/emotion 是内容类，缺失必须追问；\n'
+            '- style/duration/shot 是可选类，缺失不算严重（可用默认），但也可提示；\n'
+            '- 若用户说"随便"或已隐含，算不缺。\n'
+            '输出JSON：{"dimensions":{"subject":1,"scene":0,...},"missing":["场景/环境"],'
+            '"questions":["大概是什么场景？"]}。subject/scene/emotion 必须有缺失项追问。'
+        )
+        try:
+            r = self.chat_json([
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': f'概念：{prompt}'},
+            ], model=self.models['prompt_opt'], temperature=0.3, timeout=60, retries=1)
+        except Exception:
+            return {'complete': True, 'dimensions': dict.fromkeys(dims, 1),
+                    'missing': [], 'questions': []}
+        dims_map = r.get('dimensions', {}) if isinstance(r, dict) else {}
+        vals = {d: (1 if dims_map.get(d) else 0) for d in dims}
+        missing = [str(m) for m in (r.get('missing') or []) if m]
+        questions = [str(q) for q in (r.get('questions') or []) if q]
+        # 关键维度缺必给追问
+        for d in ('subject', 'scene', 'emotion'):
+            if not vals.get(d) and not any(dim_cn[d] in m for m in missing):
+                vals[d] = 0
+        complete = all(vals.values())
+        return {'complete': complete, 'dimensions': vals,
+                'missing': missing, 'questions': questions}
+
     def describe_character(self, image_path: str, name: str = None) -> str:
         """多模态：看角色三视图→英文详细外观描述（供 FLUX T2I prompt 用）"""
         name_hint = f' This character is called "{name}".' if name else ''

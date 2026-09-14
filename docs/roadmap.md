@@ -282,7 +282,7 @@
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索+yt-dlp下载+VAD切段+STT转写+音色注册+测试合成）+ TTS server `POST /voices/reload` 热加载 + API `POST /api/clone_voice` 异步端点。端到端验证：3 音色全通（xinwen1 新闻播音/jieshuo1 影视解说/jilupian1 纪录片，单音色 21-30s），STT 转写回验一致
 - **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR 转写+字级时间戳+字级聚合成句+ffmpeg 时段裁剪+LLM 语义 keep/drop）+ 三子命令 CLI（transcribe/clip/smart）。GPU 修复：满卡连 CUDA context 都建不出来，`device='auto'` 逐卡探测跳满卡。端到端验证：4 句剧本拼 12.6s 长音频，"只要讲光的句子" → LLM 保留 2 句 drop 2 句，输出 3.88s 回验一致
 - **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 搜图下载+magic bytes 校验+md5 去重+LLM concept→关键词+incompetech BGM 按 feel 搜曲 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。端到端验证："雪山上的日出小狐狸"→3 关键词→6 张参考图；`bgm epic` → epic.wav（61.4s loudnorm）
-- **M6 快速营销号链路** ✅：`utils/fastline.py`（FastLine）+ `vidance.py fast` 子命令——爬热点/选图 → ffmpeg zoompan(Ken Burns) 伪动态 → TTS 旁白 → crossfade 拼接 → LUT/BGM/STT，**跳过视频模型**分钟级出片。端到端验证："赛博朋克霓虹雨夜的机械狐狸"爬 3 图→9.1s 成片；auto/override LUT+BGM、`--stt`、`--slowmo` 全通。见 v4-design.md §3.6/M6
+- **M6 快速营销号链路** ✅：`utils/fastline.py`（FastLine）+ `vidance.py fast/hot` 子命令——爬热点/选图 → ffmpeg zoompan(Ken Burns) 伪动态 → TTS 旁白 → crossfade 拼接 → LUT/BGM/STT，**跳过视频模型**分钟级出片。`--images-source crawl`(爬图+多模态相关性校验，不相关自动删、不足 FLUX 补) / `flux`(FLUX 逐段英文 prompt 生图+审核门，不过重生成≤2)；热搜 `--source-topic`+`--trend-date` 写 meta+片头角标；`--slowmo` 另出 RIFE 版（原片保留）。`hot` 子命令：爬实时热点→scout 自动选题→fast 一步到位。端到端验证：hot auto 选"旅行青蛙停运"9分、crawl 校验滤 3 张不相关图 FLUX 补足、FLUX 生图过审核门（背包青蛙 score=10/程序员删89TB 3图 9/7/9）。见 v4-design.md M6
 - ~~M7 批量端到端联调 / M8 无人值守~~：经确认跳过（单任务全链路已验证即算达标；发布由人精挑细选）
 
 **新增依赖**：feedparser ✅、yt-dlp ✅、bs4+lxml ✅、fastapi+uvicorn ✅、funasr ✅
@@ -291,23 +291,26 @@
 
 ---
 
-### v5 — 剪辑特效包（🎯 待开发）
-
-> 用户编号 v6。文件 docs/v5-design.md。
+### v5 — 剪辑特效包（✅ M1-M4 完成）
 
 **目标**：丰富单镜头内/镜头间剪辑表现力，营销号更抓眼球。
 
 **范围**：`utils/effects.py`（纯 ffmpeg filter 封装）+ `llm.select_effects()` 自动选 + `--effects auto`：
-- 闪白 / 闪黑（闪回）、zoom punch-in、glitch 故障、胶片颗粒 + vignette、speed ramp 变速、定格放大、甩镜 wipes
-- xfade 内置 30 种转场（slide/wipe/radial/pixelize/hblur...）接入 concat/镜头间
+- 闪白 / 闪黑（闪回）、zoom punch-in、glitch 故障、胶片颗粒 + vignette、speed ramp 变速、定格放大、甩镜 wipes、整体推拉 zoom
+- xfade 内置 30+ 种转场（fade/slide/wipe/radial/pixelize/circleopen...）— `transition()` 双段 + `concat_with_transitions()` 链式 N 段
 
-**里程碑**：M1 特效库 → M2 LLM 自动选 → M3 pipeline 集成 → M4 端到端
+**进度**：
+- **M1 特效库** ✅：8 种镜头内特效（纯 ffmpeg yuv420p）+ 单片段 CLI `python utils/effects.py apply in.mp4 --effect punch_in -o out.mp4`
+- **M2 xfade 转场** ✅：`transition()`/`concat_with_transitions()`，3 clip 链式拼接 5.2s 验证
+- **M3 LLM 自动选** ✅：`llm.select_effects()` 按每镜内容/情绪选特效+转场，`fast/hot --effects auto` 集成
+- **M4 端到端** ✅：`fast "夜色中城市霓虹与火光" --effects auto` → glitch/grain_vignette/freeze_zoom → 9.0s 成片，meta 记录 effects/transitions
+
+**详细设计**：见 [v5-design.md](./v5-design.md)（✅ M1-M4 完成）
 
 ---
 
 ### v6 — prompt 多轮核实（🎯 待开发）
 
-> 用户编号 v7。文件 docs/v6-design.md。
 
 **目标**：prompt 信息不全时打回，多轮对话核实用户详细需求，避免"不是很清楚就硬做"。
 
@@ -319,7 +322,6 @@
 
 ### v7 — 前端（🎯 待开发）
 
-> 用户编号 v8。文件 docs/v7-design.md。
 
 **目标**：Web 界面，摆脱纯 CLI，营销号运营看得见、点得动。
 
@@ -331,7 +333,6 @@
 
 ### v8 — 一镜到底（🎯 待开发）
 
-> 用户编号 v9。文件 docs/v8-design.md。
 
 **目标**：突破单镜 ≤5s（Wan 121 帧上限）限制，实现 30s+ 连续性镜头。
 
@@ -435,10 +436,10 @@ vidance/
 │   ├── deployed-models.md     # 已部署模型清单
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（✅ M0-M7 完成，M8 跳过）
 │   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M5 完成 + M6 快速链路设计）
-│   ├── v5-design.md           # v5 剪辑特效包（用户编号 v6，🎯 待开发）
-│   ├── v6-design.md           # v6 prompt 多轮核实（用户编号 v7，🎯 待开发）
-│   ├── v7-design.md           # v7 前端（用户编号 v8，🎯 待开发）
-│   ├── v8-design.md           # v8 一镜到底（用户编号 v9，🎯 待开发）
+│   ├── v5-design.md           # v5 剪辑特效包（✅ M1-M4 完成）
+│   ├── v6-design.md           # v6 prompt 多轮核实（🎯 待开发）
+│   ├── v7-design.md           # v7 前端（🎯 待开发）
+│   ├── v8-design.md           # v8 一镜到底（🎯 待开发）
 │   ├── hierachy.md
 │   ├── tech.md
 │   └── experience.md
