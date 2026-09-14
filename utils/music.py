@@ -168,8 +168,8 @@ def generate_bgm(mood: str, duration: float, output_path: str, sr: int = SR) -> 
     func = MOOD_FUNCS.get(mood, gen_calm)
     wave = func(duration, sr=sr)
 
-    # 归一化 + 立体声
-    wave = wave / max(1, np.max(np.abs(wave))) * 0.8
+    # 归一化 + 立体声（+1e-9 防全零除零，勿用 max(1,...) 钳制峰值）
+    wave = wave / (np.max(np.abs(wave)) + 1e-9) * 0.8
     stereo = np.column_stack([wave, wave])
     stereo = (stereo * 32767).astype(np.int16)
 

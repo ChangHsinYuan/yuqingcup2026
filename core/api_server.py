@@ -17,6 +17,8 @@ API:
   POST   /api/clone_voice    音色克隆（爬人声→CosyVoice，异步）
   GET    /api/clone_voice/{id}  查询克隆任务
   GET    /api/voices         已注册自定义音色
+  POST   /api/clip           FunClip 长素材语义裁剪（异步）
+  GET    /api/clip/{id}      查询裁剪任务
 """
 import argparse
 import json
@@ -68,6 +70,13 @@ class CloneVoiceRequest(BaseModel):
     index: int = 0
     desc: Optional[str] = None
     reload_tts: bool = True
+
+
+class ClipRequest(BaseModel):
+    input: str
+    instructions: str
+    output: Optional[str] = None
+    use_llm: bool = True
 
 
 @app.on_event('startup')
@@ -225,6 +234,65 @@ def get_clone_voice(job_id: str):
 def list_voices():
     from utils.voice_clone import VoiceCloner
     return {'custom': VoiceCloner().list_voices()}
+
+
+# ── v4 M4: FunClip 长素材语义裁剪（异步线程，ASR+LLM 约 30s-2min） ──
+_clip_jobs = {}
+_clip_jobs_lock = threading.Lock()
+
+
+def _run_clip(job_id: str, req: ClipRequest):
+    from utils.funclip import FunClip
+    try:
+        out = req.output
+        if out and not os.path.isabs(out):
+            out = os.path.join(load_config().get('output_dir', 'output'), out)
+        if not out:
+            base, ext = os.path.splitext(req.input)
+            out = base + '_clipped' + (ext or '.wav')
+
+        llm = None
+        if req.use_llm:
+            from utils.llm import LLMClient
+            llm = LLMClient()
+
+        fc = FunClip()
+        r = fc.smart_clip(req.input, req.instructions, out, llm=llm)
+        with _clip_jobs_lock:
+            _clip_jobs[job_id].update({
+                'status': 'completed', 'output': out,
+                'segments': r['segments'], 'keep': r['keep'],
+                'sentences': r['sentences'],
+                'completed_at': datetime.now().isoformat(),
+            })
+    except Exception as e:
+        with _clip_jobs_lock:
+            _clip_jobs[job_id].update({
+                'status': 'failed', 'error': str(e),
+                'completed_at': datetime.now().isoformat(),
+            })
+
+
+@app.post('/api/clip')
+def clip(req: ClipRequest):
+    job_id = f'clip_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    with _clip_jobs_lock:
+        _clip_jobs[job_id] = {
+            'job_id': job_id, 'input': req.input,
+            'instructions': req.instructions,
+            'status': 'running', 'created_at': datetime.now().isoformat(),
+        }
+    threading.Thread(target=_run_clip, args=(job_id, req), daemon=True).start()
+    return {'job_id': job_id, 'status': 'running'}
+
+
+@app.get('/api/clip/{job_id}')
+def get_clip(job_id: str):
+    with _clip_jobs_lock:
+        job = _clip_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job not found')
+    return job
 
 
 if __name__ == '__main__':

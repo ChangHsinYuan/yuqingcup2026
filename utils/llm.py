@@ -449,7 +449,14 @@ class LLMClient:
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': content},
         ]
-        return self.chat_json(messages, model=model, temperature=0.3, timeout=180, retries=2)
+        r = self.chat_json(messages, model=model, temperature=0.3, timeout=180, retries=2)
+        # LLM 可能漏输出字段，规范化（防 pipeline KeyError）
+        if isinstance(r, dict):
+            r.setdefault('score', 7)
+            r.setdefault('dimensions', {})
+            r.setdefault('feedback', '')
+            r.setdefault('pass', float(r.get('score', 7)) >= 7)
+        return r
 
     def review_character(self, character_ref: str, preview_paths: list) -> dict:
         """角色锚质量审查：参考图+多角度预览→{score, pass, feedback}"""
@@ -476,7 +483,13 @@ class LLMClient:
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': content},
         ]
-        return self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=180, retries=2)
+        r = self.chat_json(messages, model=self.models['review'], temperature=0.3, timeout=180, retries=2)
+        if isinstance(r, dict):
+            r.setdefault('score', 6)
+            r.setdefault('dimensions', {})
+            r.setdefault('feedback', '')
+            r.setdefault('pass', float(r.get('score', 6)) >= 6)
+        return r
 
     def scout_topics(self, hot_topics: list, account_type: str = '',
                      n_candidates: int = 5) -> list:

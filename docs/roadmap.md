@@ -272,23 +272,22 @@
 
 **详细设计**：见 [v3-design.md](./v3-design.md)（M0+M1+M2+M3+M4+M5+M6+M7 完成，角色双路径+资产库+端到端打通）
 
-### v4 — 营销号流水线（🚧 M1+M2+M3 完成，M4-M8 待开始）
+### v4 — 营销号流水线（🚧 M1+M2+M3+M4+M5 完成，M6-M7 待开始；发布不做，人精选手动上传）
 
-**目标**：批量自动化内容生产与发布。
+**目标**：批量自动化内容生产（发布由人工精挑细选，手动上传）。
 
 **进度**：
 - **M1 爬虫+选题** ✅：`utils/crawler.py`（B站API+微博+知乎+百度+RSS+yt-dlp）+ `llm.scout_topics()`（热点→概念候选排序）+ scout subagent + topic_scouting skill。端到端验证：45 条热点 → 5 个概念候选（9/8/8/7/7 分）
 - **M2 异步任务队列** ✅：`core/scheduler.py`（TaskQueue SQLite + Scheduler 线程轮询）+ `core/api_server.py`（FastAPI :8894）+ `core/dashboard.py`（HTML 仪表盘）。端到端验证：3 任务提交 → 串行执行 → 3 成片（柴犬/赛博朋克/小厨娘，总计 36s 视频）
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索+yt-dlp下载+VAD切段+STT转写+音色注册+测试合成）+ TTS server `POST /voices/reload` 热加载 + API `POST /api/clone_voice` 异步端点。端到端验证：3 音色全通（xinwen1 新闻播音/jieshuo1 影视解说/jilupian1 纪录片，单音色 21-30s），STT 转写回验一致
-- M4 FunClip 智能裁剪
-- M5 发布模块 + publisher subagent
-- M6 素材爬取
-- M7 批量端到端联调
-- M8 无人值守批量生产验证
+- **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR 转写+字级时间戳+字级聚合成句+ffmpeg 时段裁剪+LLM 语义 keep/drop）+ 三子命令 CLI（transcribe/clip/smart）。GPU 修复：满卡连 CUDA context 都建不出来，`device='auto'` 逐卡探测跳满卡。端到端验证：4 句剧本拼 12.6s 长音频，"只要讲光的句子" → LLM 保留 2 句 drop 2 句，输出 3.88s 回验一致
+- **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 搜图下载+magic bytes 校验+md5 去重+LLM concept→关键词+incompetech BGM 按 feel 搜曲 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。端到端验证："雪山上的日出小狐狸"→3 关键词→6 张参考图；`bgm epic` → epic.wav（61.4s loudnorm）
+- M6 批量端到端联调
+- M7 无人值守批量生产验证
 
-**新增依赖**：feedparser ✅、yt-dlp ✅、bs4+lxml ✅、fastapi+uvicorn ✅、发布 API、FunClip
+**新增依赖**：feedparser ✅、yt-dlp ✅、bs4+lxml ✅、fastapi+uvicorn ✅、funasr ✅
 
-**详细设计**：见 [v4-design.md](./v4-design.md)（🚧 M1+M2+M3 完成，M4-M8 待开始）
+**详细设计**：见 [v4-design.md](./v4-design.md)（🚧 M1+M2+M3+M4+M5 完成，M6-M7 待开始）
 
 ---
 

@@ -2,7 +2,7 @@
 
 > 总览与 v0-v4 路线见 [roadmap.md](./roadmap.md)，v1-v3 见对应 design 文档
 >
-> **状态：🚧 实现中**（M1+M2+M3 完成：爬虫+选题+异步任务队列+声音克隆生产化，M4-M8 待开始）
+> **状态：🚧 实现中**（M1+M2+M3+M4+M5 完成：爬虫+选题+异步任务队列+声音克隆生产化+FunClip 智能裁剪+素材爬取，M6-M7 待开始）
 
 ## 1. 概述
 
@@ -23,7 +23,6 @@ v0-v3 是"单片精修"系统：一次概念 → 一部高质量短片。但要�
 - **素材爬取**：参考图、人声样本、配乐自动获取
 - **声音克隆生产化**：从爬取人声克隆固定音色库
 - **异步任务制**：POST 提交 + GET 轮询，支持并发批量
-- **自动发布**：成片自动上传多平台
 - **FunClip 智能裁剪**：长素材 ASR 驱动裁剪
 
 ### 1.3 v4 范围
@@ -35,18 +34,16 @@ v0-v3 是"单片精修"系统：一次概念 → 一部高质量短片。但要�
 | 参考图/人声/配乐爬取 | 版权清洗（标注来源，人工审核） |
 | 声音克隆生产化（爬人声→CosyVoice 音色） | 实时变声 |
 | 异步任务队列（POST/GET，并发批量） | 分布式集群（单机多 GPU 够） |
-| 自动发布（YouTube/TikTok/视频号） | 全平台覆盖（先主流） |
 | FunClip 长素材智能裁剪 | 专业级剪辑 |
-| 批量生成调度（GPU 队列） | — |
+| 批量生成调度（GPU 队列） | 自动发布（人精挑细选，手动上传） |
 
 ### 1.4 核心验证点
 
 1. 热点爬取 + agent 选题能否稳定产出可用概念
 2. 异步任务队列并发 N 片时 GPU 调度是否稳定（v0-v3 串行单片）
 3. 声音克隆从爬取人声到可用音色的自动化程度
-4. 自动发布的稳定性（平台 API/cookie 授权）
-5. FunClip 裁剪对长旁白素材的智能程度
-6. 批量生产的内容质量是否可接受（vs v0-v3 精修）
+4. FunClip 裁剪对长旁白素材的智能程度
+5. 批量生产的内容质量是否可接受（vs v0-v3 精修）
 
 ---
 
@@ -57,26 +54,25 @@ v0-v3 是"单片精修"系统：一次概念 → 一部高质量短片。但要�
 ```
 v3:  人想概念 → 单片精修（同步一条龙）→ 人手动发布
 
-v4:  [爬热点] → agent 选题 → [批量异步任务] → [自动发布]
-                        ↑                ↓
-              [素材爬取/音色克隆]   [FunClip 裁剪]
+v4:  [爬热点] → agent 选题 → [批量异步任务] → 人精选后手动发布
+                         ↑                ↓
+               [素材爬取/音色克隆]   [FunClip 裁剪]
 ```
 
 ### 2.2 三层架构（v4）
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  产品层   v4: 营销号流水线（批量自动生产+发布）            │
+│  产品层   v4: 营销号流水线（批量自动生产，人精选发布）      │
 ├──────────────────────────────────────────────────────────┤
 │  编排层   opencode agent runtime                          │
-│           director + subagents(scout/reviewer/publisher)  │
+│           director + subagents(scout/reviewer)            │
 │           core/ scheduler（异步队列 + 批量调度）           │
 ├──────────────────────────────────────────────────────────┤
 │  引擎层   选题: 爬虫(feedparser/yt-dlp/bs4) + LLM         │
 │           生成: 复用 v1-v3 全引擎（角色锚/场景锚/后期）    │
 │           音色: CosyVoice 克隆生产化                       │
 │           裁剪: FunClip (ASR 驱动)                        │
-│           发布: 平台 API (YouTube/TikTok/视频号)           │
 │           队列: FastAPI + 内存/SQLite 任务队列             │
 │           LLM: USTC API                                   │
 └──────────────────────────────────────────────────────────┘
@@ -92,8 +88,6 @@ v4:  [爬热点] → agent 选题 → [批量异步任务] → [自动发布]
 | 素材爬取（参考图/人声/BGM） | 确定性执行 | **code** |
 | 音色克隆生产化 | 确定性执行 | **code** |
 | 批量调度（GPU 队列） | 确定性执行 | **code**（scheduler） |
-| 发布前审查（合规/质量） | 判断 | **agent**（reviewer + publisher） |
-| 自动发布 | 确定性执行 | **code** |
 | FunClip 裁剪决策 | 创意决策 | **agent** |
 
 ### 2.4 agent 拓扑（v4）
@@ -113,13 +107,11 @@ v4:  [爬热点] → agent 选题 → [批量异步任务] → [自动发布]
   │     ├─ [素材爬取] 参考图/人声（按需）
   │     ├─ [生成] 复用 v1-v3 pipeline（异步任务）
   │     ├─ [FunClip] 长旁白素材智能裁剪
-  │     ├─ task → reviewer 审片（复用，含合规维度）
-  │     └─ task → publisher subagent
-  │              输入: 成片 + 平台列表 + 账号凭据
-  │              输出: 发布结果 [{platform, url, status}]
+  │     └─ task → reviewer 审片（复用，含合规维度）
   │
   └─ [调度] scheduler 管理并发任务队列
 ```
+（发布不做：成片人工精选后手动上传）
 
 ### 2.5 异步任务制（v4 核心）
 
@@ -139,7 +131,7 @@ GET /tasks?status=running   # 批量查询
 - **队列**：FastAPI + SQLite 持久化（轻量，无需 Redis）
 - **并发**：同时跑 N 片（N = GPU 调度能力，初始 2-3）
 - **调度**：scheduler 进程轮询队列，按 GPU 空闲分配任务
-- **状态机**：queued → running(generating/post_processing/publishing) → completed/failed
+- **状态机**：queued → running(generating/post_processing) → completed/failed
 
 ---
 
@@ -208,21 +200,9 @@ v0 手动放 prompt.wav，v4 自动化：
 - **场景**：爬取长视频素材 → FunClip 提取关键段做参考
 - FunClip 是阿里同生态（基于 FunASR），中文 ASR 强
 
-### 3.5 自动发布
+### 3.5 发布（不做）
 
-```
-[成片] → publisher subagent
-  输入: final.mp4 + 平台列表 + 标题/描述/标签（LLM 生成）
-  执行:
-    YouTube: YouTube Data API（OAuth 授权，上传视频）
-    TikTok: 官方 API 或 cookie 模拟上传（参考 MoneyPrinterTurbo）
-    视频号: cookie 模拟（无公开 API）
-  输出: [{platform, url, status, uploaded_at}]
-```
-
-- **凭据管理**：平台 token/cookie 存 `config/publish_credentials.json`（不入 git）
-- **参考**：MoneyPrinterTurbo 的 `upload_post.py`（YouTube/TikTok 实现）
-- **审核**：发布前 reviewer 审合规（无违规内容/版权问题）
+发布不在 v4 范围：成片人工精挑细选后手动上传。流水线产出停在 `output/{task_id}/final.mp4` + meta.json，人从仪表盘（`/api/dashboard`）挑片看片，满意的手动发平台。
 
 ---
 
@@ -236,14 +216,13 @@ v0 手动放 prompt.wav，v4 自动化：
   "task_id": "20260910_001",
   "concept": "...",
   "status": "running",          // queued|running|completed|failed
-  "stage": "generating",        // generating|post_processing|publishing
+  "stage": "generating",        // generating|post_processing
   "progress": 0.6,
   "options": { "version": "v2", "voice": "edge-xiaoxiao", "duration": 60 },
   "created_at": "...",
   "started_at": "...",
   "completed_at": null,
   "output": null,               // "final.mp4" 完成后填
-  "publish_results": null,      // [{platform, url, status}]
   "error": null
 }
 ```
@@ -302,14 +281,6 @@ funclip clip --input long.mp4 --text "保留片段语义描述" --output clipped
 # 或 Python API：FunASR 转写 → 语义裁剪
 ```
 
-### 5.4 发布（新组件）
-
-| 平台 | 方式 | 参考 |
-|------|------|------|
-| YouTube | Data API v3（OAuth） | MPT `upload_post.py` |
-| TikTok | 官方 API / cookie 模拟 | MPT `upload_post.py` |
-| 视频号 | cookie 模拟 | 待验证 |
-
 ### 5.5 复用 v1-v3 组件
 
 全部生成引擎（FLUX/TripoSplat/Hunyuan3D/RenderSplat/Wan I2V/TTS/RIFE/ffmpeg）、LLM、审片 —— 复用。
@@ -358,22 +329,11 @@ director → task → scout subagent
   模型: deepseek-v4-flash（文本，快）
 ```
 
-### 7.2 publisher subagent（发布）
-
-```
-director → task → publisher subagent
-  输入: 成片 + 平台列表 + 凭据
-  输出: 发布结果
-  职责: 调发布 API/cookie 上传，返回 URL
-  不做: 不审片（reviewer 先审）
-```
-
-### 7.3 skills
+### 7.2 skills
 
 | skill | 用途 |
 |-------|------|
 | `topic_scouting/SKILL.md` | 选题规范（账号定位匹配/角度创新/打分） |
-| `publishing/SKILL.md` | 发布规范（平台差异/标题标签生成/合规） |
 
 ---
 
@@ -391,11 +351,7 @@ director → task → publisher subagent
 
 ### 8.2 新增外部服务
 
-| 服务 | 用途 | 状态 |
-|------|------|------|
-| YouTube Data API | 发布 | ❌ 需 OAuth 配置 |
-| TikTok API/cookie | 发布 | ❌ 需验证 |
-| 视频号 cookie | 发布 | ❌ 需验证 |
+（无发布相关服务；v4 全部外部依赖在 v1-v3 已有：USTC LLM、ComfyUI、CosyVoice）
 
 ### 8.3 代码新增
 
@@ -405,12 +361,9 @@ director → task → publisher subagent
 | `core/api_server.py` | FastAPI 异步接口 |
 | `utils/crawler.py` | 热点/素材爬取 |
 | `utils/voice_clone.py` | 声音克隆生产化 |
-| `utils/publisher.py` | 多平台发布 |
 | `utils/funclip.py` | FunClip 裁剪封装 |
 | `.opencode/agents/scout.md` | scout subagent |
-| `.opencode/agents/publisher.md` | publisher subagent |
 | `.opencode/skills/topic_scouting/SKILL.md` | 选题规范 |
-| `.opencode/skills/publishing/SKILL.md` | 发布规范 |
 
 ---
 
@@ -421,10 +374,9 @@ v4 跑通的标志：
 1. **热点选题**：爬热点 → scout 选概念 → 生成，无需人工想概念
 2. **异步队列**：POST 提交 → GET 轮询，支持 ≥2 任务并发
 3. **音色克隆**：爬人声 → 自动克隆 → 可用音色，无需手动备
-4. **自动发布**：成片自动上传 ≥1 平台（YouTube/TikTok），返回 URL
-5. **FunClip**：长素材智能裁剪可用
-6. **批量生产**：一次提交 5 个概念，队列调度全部完成出片
-7. **质量**：批量成片质量可接受（vs v0-v3 精修，允许略降）
+4. **FunClip**：长素材智能裁剪可用
+5. **批量生产**：一次提交 5 个概念，队列调度全部完成出片
+6. **质量**：批量成片质量可接受（vs v0-v3 精修，允许略降）
 
 验收命令（设计）：
 ```bash
@@ -434,8 +386,8 @@ for c in "概念1" "概念2" "概念3"; do
 done
 # 轮询
 curl localhost:8000/tasks?status=running
-# 自动选题+生成+发布
-python core/scheduler.py --auto-scout --account "影视解说" --publish youtube,tiktok
+# 自动选题+生成
+python core/scheduler.py --auto-scout --account "影视解说"
 ```
 
 ---
@@ -446,7 +398,6 @@ python core/scheduler.py --auto-scout --account "影视解说" --publish youtube
 |------|------|------|
 | 热点爬取被反爬/限流 | 选题断供 | 多源 RSS + 间隔抓取 + User-Agent 轮换 |
 | scout 选题质量不稳 | 概念不可用 | 多候选打分 + 人工可审环节 |
-| 平台发布 API 变动/封号 | 发布失败 | cookie 模拟降级；发布频率限流 |
 | 声音克隆音色侵权 | 法律风险 | 只克隆公众/授权人声；标注来源 |
 | 并发致 GPU OOM | 任务失败 | MAX_CONCURRENT 保守；scheduler 监控显存 |
 | FunClip 中文裁剪不准 | 裁剪不当 | FunASR 中文强；人工兜底 |
@@ -463,12 +414,11 @@ python core/scheduler.py --auto-scout --account "影视解说" --publish youtube
 | M2 | 异步任务队列（FastAPI + SQLite）+ scheduler | 并发调度 |
 | M3 | 声音克隆生产化（爬人声→音色） | 自动音色 |
 | M4 | FunClip 智能裁剪接入 | 长素材处理 |
-| M5 | 发布模块（YouTube/TikTok）+ publisher subagent | 自动发布 |
-| M6 | 素材爬取（参考图/BGM） | 素材自动化 |
-| M7 | 批量端到端联调（5 概念并发） | 流水线闭环 |
-| M8 | 无人值守批量生产验证 | v4 上线 |
+| M5 | 素材爬取（参考图/BGM） | 素材自动化 |
+| M6 | 批量端到端联调（5 概念并发） | 流水线闭环 |
+| M7 | 无人值守批量生产验证 | v4 上线 |
 
-> 依赖 v1-v3 完成。v4 是工程化阶段，引擎复用，重点在调度/爬虫/发布/异步。
+> 依赖 v1-v3 完成。v4 是工程化阶段，引擎复用，重点在调度/爬虫/异步。发布由人工精挑细选手动完成，不在流水线范围。
 
 ### M1 完成详情（2026-09-12）
 
@@ -507,3 +457,29 @@ python core/scheduler.py --auto-scout --account "影视解说" --publish youtube
   - `cosy-jilupian1` 纪录片-男声（API 异步端点克隆）
   - STT 转写回验克隆合成内容一致；注册音色可按名直接调用（无需传 prompt_wav）
 - 调试修复：①测试合成 synthesize 需传 output_path；②解说风语音连续 → 音乐过滤下移到段级别（只跳纯 ♪ 段）+ 巨块取多窗口；③yt-dlp 同名跳过下载 → 文件名按 bvid 隔离
+
+### M4 完成详情（2026-09-13）
+
+- `utils/funclip.py`（~330行）：`FunClip` 智能裁剪器
+  - **转写**：FunASR `iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch`（~1.1GB，缓存于 ~/.cache/modelscope/），`generate(batch_size_s=300, return_raw=True)` 返回字级 text+timestamp（[[130,350],[350,510],...] ms 段）
+  - **聚合**：字级时间戳按字间停顿（gap>300ms 或累计>1500ms）聚合成句
+  - **裁剪**：ffmpeg concat demuxer，`_has_video()` 自动探测视频/纯音频（视频 yuv420p+High profile，音频 pcm_s16le wav）
+  - **语义**：`smart_clip()` LLM 逐句 keep/drop 判定 → 合并连续保留段（吸收 <400ms 句间静音）→ 裁剪
+  - **GPU 修复**：满卡（GPU0 被 H3 占满 48.4G）连 CUDA context 都建不出来（`cudaMemGetInfo` 直接抛 OOM），`device='auto'` 逐卡 try/except 探测跳过建不了 context 的卡 + 选空闲显存最多的卡；CLI 默认 `cuda:0` 触碰满卡即死是之前 OOM 之谜的根因
+  - CLI 三子命令：transcribe（--sentences）/ clip（--segments "0-3,5-8"）/ smart（-i 指令，--no-llm）
+  - `api_server.py`：加 `POST /api/clip`（异步线程）+ `GET /api/clip/{job_id}`
+- 端到端验证：
+  - 4 句水母剧本（subtitle.srt）拼 12.6s 长音频 → 指令"只要讲光的句子" → LLM 保留 2 句（"光从寂静中诞生"+"黑暗拥抱它它也点亮黑暗"，语义含"点亮之光"）drop 2 句 → 输出 3.88s，ASR 转写回验一致
+  - API 异步端点：clip_20260913_192833 completed，keep=[T,F,F,F,T,T,F,F]，output 落 output_dir
+
+### M5 完成详情（2026-09-13）
+
+- `utils/asset_crawler.py`（~290行）：`AssetCrawler` 素材爬取器（人声样本已在 M3 voice_clone.py 完成）
+  - **参考图**：必应图片 async 接口（`cn.bing.com/images/async`，直连可达）解析 `m="{...}"` JSON 属性取原图直链 murl → 下载 + magic bytes 校验（JPEG/PNG/WebP/GIF/BMP）+ ≥8KB + md5 去重；百度 acjson 接口需真 cookie（antiFlag 拦截）已弃用
+  - **关键词**：LLM concept → 图片搜索关键词（chat_json，无 llm 退化为 concept 原文）
+  - **BGM**：incompetech.com（Kevin MacLeod CC BY，直连可达）pieces.json（1442 曲目，固化到 bgm/pieces.json）按 feel 标签搜曲 → 下载 → loudnorm I=-20:TP=-1.5:LRA=11 → bgm/{mood}.wav（select_bgm custom_dir 自动生效）
+  - **修正**：pieces.json 时长字段是 `length`（'HH:MM:SS' 格式）非 duration（读错字段曾把 130 首 epic 全滤掉）；filename 自带 `.mp3` 后缀不可重复拼（拼重 404）；按"越接近 60s 越好"排序（避免 200MB 巨物+太短不够用）
+  - CLI 四子命令：keywords（LLM 提取）/ images（搜图下载）/ refs（concept→关键词→图片一条龙）/ bgm（--list / 下载）
+- 端到端验证：
+  - concept"雪山上的日出小狐狸" → LLM 3 关键词（雪山之巅金色晨曦狐狸剪影/雪峰日出霞光狐狸遥望/雪山日出橘色天幕狐狸侧影）→ 6 张参考图（19-129KB，jpg/png 正确识别）
+  - `bgm epic --list` → 5 首候选（58-62s，Fanfare for Space/Achilles/Strength of the Titans...）→ 爬取 epic.wav（61.4s 10.8MB loudnorm）

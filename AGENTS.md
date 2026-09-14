@@ -8,7 +8,7 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1+M2+M3 完成**（2026-09-13）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1+M2+M3+M4+M5 完成**（2026-09-13）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -32,10 +32,12 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M6 资产库** ✅：`utils/asset_registry.py`（CRUD+模糊搜索+CLI），pipeline 集成（角色 mesh/3dgs 重建前查库复用 + 重建后自动入库），`--no-asset-reuse` flag，`.opencode/agents/asset.md` subagent，14 项测试全通过
 - **M7 端到端联调** ✅：`auto --character-mode mesh` 全链路跑通（FLUX 三视图→Hunyuan3Dv2 multiview→mesh_render→Wan I2V→RIFE slowmo→LUT→BGM→合成），3 镜 12.8s 成片 `output/20260912_183520/final.mp4`。**修复**：RIFE slowmo（4帧→233帧，concat demuxer→image2 demuxer）、LLM 审查模型（claude-haiku-4-5 下架→qwen3.8-chat）、审查超时（60s→180s+retries=2）、multiview mesh（单图 Z=0.009 纸片→三视图 Z=1.56 真实3D）。审查系统生效：角色 score=3、Shot 2 score=3.2/4（retry）、Shot 3 score=6/5/5（retry）
 
-**v4 营销号流水线**（M1+M2+M3 完成，M4-M8 待开始）：
+**v4 营销号流水线**（M1+M2+M3+M4+M5 完成，M6-M7 待开始；发布不做，人精选手动上传）：
 - **M1 爬虫+选题** ✅：`utils/crawler.py`（B站 API+微博+知乎+百度+RSS+yt-dlp 多源热点抓取）+ `llm.scout_topics()`（热点→概念候选排序）+ `.opencode/agents/scout.md` subagent + `.opencode/skills/topic_scouting/SKILL.md`。端到端验证：45 条热点（B站/微博/知乎各 15）→ 5 个概念候选（9/8/8/7/7 分），概念有画面感且结合热点创意角度
 - **M2 异步任务队列** ✅：`core/scheduler.py`（`TaskQueue` SQLite 持久化 + `Scheduler` 线程轮询 + CLI）+ `core/api_server.py`（FastAPI :8894，POST/GET/DELETE /api/tasks + /api/health + /api/scout + /api/dashboard）+ `core/dashboard.py`（自包含 HTML 仪表盘，base64 缩略图，30s auto-refresh）。`pipeline.py` + `vidance.py` 加 `--task-id` 参数。端到端验证：3 任务提交 → 串行执行（max_concurrent=1）→ 3 成片（柴犬 12.7s / 赛博朋克 11.4s / 小厨娘 11.9s），可视化产出 `output/dashboard.html` + `output/m2_results.html`
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索 API 随机 buvid3 过反爬 → yt-dlp 下载按 bvid 隔离 → faster-whisper VAD 切段（跳过纯 ♪ 器乐、长块取 8s 窗口、均分质量门 -32dB）→ 24kHz mono 16bit ffmpeg 转换 → STT 转写 prompt_text → 入库 voices/{name}/ 自动注册 cosy-{name} → 测试合成存 voice_samples/）。TTS server 加 `POST /voices/reload` 热加载（免重启注册新音色）。API server 加 `POST /api/clone_voice` 异步克隆端点 + `GET /api/voices`。端到端验证：3 音色克隆全通（xinwen1 新闻播音 / jieshuo1 影视解说 / jilupian1 纪录片，单音色 21-30s），STT 转写回验内容一致，注册音色可按名直接调用
+- **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR `speech_paraformer-large-vad-punc` 转写 + 字级时间戳 + 字级聚合成句 + ffmpeg 时段裁剪拼接 + LLM 语义 keep/drop）。三子命令 CLI（transcribe/clip/smart）。**GPU 修复**：满卡（GPU0 被 H3 占满）连 CUDA context 都建不出来（`cudaMemGetInfo` 直接 OOM），`device='auto'` 逐卡探测跳过建不了 context 的卡并选空闲显存最多的卡。端到端验证：4 句水母剧本拼 12.6s 长音频，指令"只要讲光的句子" → LLM 保留 2 句（含语义含"点亮之光"的一句）drop 2 句 → 输出 3.88s，转写回验内容一致；CLI OOM 修复后 14 字全对
+- **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 接口搜图下载 + magic bytes 校验 + md5 去重 + LLM concept→关键词 + incompetech BGM 按 feel 搜曲下载 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。**修正**：pieces.json 的时长字段是 `length`（HH:MM:SS 格式）非 duration；filename 自带 `.mp3` 后缀不可重复拼（拼重会 404）；百度图片 acjson 接口需真 cookie 已弃用，必应 `cn.bing.com/images/async` 直连可达。端到端验证：concept"雪山上的日出小狐狸"→LLM 3 关键词→6 张参考图（19-129KB）；`bgm epic --list` 5 首候选（58-62s）→ 爬取 epic.wav（61.4s 10.8MB loudnorm）；pieces.json 固化到 bgm/pieces.json
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -58,7 +60,7 @@ vidance/
 │   ├── custom_gen.py          # custom 模式 H3 ref2va 生成（内部模块）
 │   ├── postprocess.py         # 共享后处理（RIFE/LUT/BGM/STT）
 │   ├── scheduler.py           # v4 异步任务队列（TaskQueue SQLite + Scheduler 线程轮询）
-│   ├── api_server.py          # v4 FastAPI 服务（:8894，任务提交/查询/仪表盘/选题）
+│   ├── api_server.py          # v4 FastAPI 服务（:8894，任务提交/查询/仪表盘/选题/克隆/裁剪）
 │   └── dashboard.py           # v4 HTML 仪表盘生成（队列统计+缩略图+选题批次）
 ├── utils/
 │   ├── comfy_api.py           # ComfyUI HTTP 客户端（T2V/I2V/TripoSplat/FLUX T2I/H3 ref2va）
@@ -76,6 +78,8 @@ vidance/
 │   ├── asset_registry.py      # v3 资产库管理（CRUD+模糊搜索+CLI，M6 已封装）
 │   ├── crawler.py             # v4 热点爬虫（B站API+微博+知乎+百度+RSS+yt-dlp，M1 已封装）
 │   ├── voice_clone.py         # v4 声音克隆生产化（B站搜索+VAD切段+STT转写+音色注册，M3 已封装）
+│   ├── funclip.py             # v4 FunClip 智能裁剪（FunASR字级时间戳+LLM语义keep/drop，M4 已封装）
+│   ├── asset_crawler.py       # v5 素材爬取（必应图片+LLM关键词+incompetech BGM，M5 已封装）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
 │   └── workflows/
 │       ├── wan_t2v.json       # Wan T2V workflow 模板
@@ -336,7 +340,7 @@ curl -X POST http://127.0.0.1:8894/api/clone_voice \
    - USTC qwen3.8-chat 多模态调用延迟 30-120s/镜，已加 180s timeout + 2 retries + safe fallback
    - 多数审片实际 auto-pass（超时降级），仅前 2 次成功返回详细反馈
 4. **review_character 超时**：4 张 512×512 预览图 + 1 ref，payload 较大，通常超时 auto-pass
-5. **BGM 为程序合成**（v2）：numpy 生成简单环境音乐，质量有限，留 `bgm/` 自定义目录供放入真实素材
+ 5. **BGM 已修复为真实素材**（2026-09-13 修复）：原 numpy 程序合成（music.py）有两个问题——①归一化 bug `wave/max(1,np.max(...))*0.8` 用 `max(1,...)` 钳制分母导致峰值锁死 -18dB；②calm/mysterious/dramatic 设计成超低频 drone（55-82Hz），人耳+普通喇叭听不见（放大音量也无济于事）。**修复**：①`music.py` 归一化改为 `wave/(np.max(np.abs(wave))+1e-9)*0.8`；②从 incompetech.com（Kevin MacLeod，CC BY 免版权，直连可达）下 5 首真实纯音乐经 loudnorm 归一到 I≈-20 LUFS 存 `bgm/{calm,uplifting,mysterious,dramatic,playful}.wav`，`select_bgm` 自动优先使用 custom_dir（无需改代码）。注意 `bgm/` 是真实长曲（59-261s），compose 会按视频时长截断；如需换曲直接替换 `bgm/{mood}.wav`（响度建议 I≈-20 LUFS）
 6. **LUT 为程序生成**（v2）：numpy 生成 6 种风格 3D LUT，效果不如专业 LUT 包，留 `color.lut_dir` 自定义路径
 7. **STT 默认关闭**（v2）：TTS 时间戳通常够用，`--stt` 仅在需要重新对齐时开启（额外 GPU 显存+耗时）
 8. **视频编码统一 yuv420p**（v2 修复）：LUT 调色 + STT 烧录的 ffmpeg 命令均加 `-pix_fmt yuv420p`，确保所有播放器兼容（之前 lut3d 滤镜导致输出 yuv444p，部分播放器无法播放）
@@ -350,3 +354,22 @@ curl -X POST http://127.0.0.1:8894/api/clone_voice \
 16. **v3 M1 mesh 为 non-watertight**（v3）：Hunyuan3Dv2 turbo 输出 mesh 为 non-watertight（VoxelToMesh surface net 特性），不影响渲染但影响后续物理仿真/布尔运算。M2 多视角重建改善：主连通分量 38%→63%，bbox 比例更自然（aspect 1.02→1.69）
 17. **v3 pyrender 材质处理**（v3，✅ M3 已处理）：GLB 的 PBR 材质在 pyrender 可能部分丢失，M3 封装时已加 3-point lighting（key+fill+ambient）和 `gray_fallback` 选项（覆盖为灰色材质用于预览审查）
 18. **~~v3 Hunyuan3Dv2 与 Wan 共实例~~ → 已分离**（v3）：Hunyuan3Dv2 已独立到 GPU1:8193，不再与 Wan 共用 8189，3D 重建与视频生成可并行
+
+# v4 FunClip 智能裁剪（长素材语义裁剪，device='auto' 自动选卡）
+# 转写显示字级时间戳
+python utils/funclip.py transcribe output/clips/narration.wav
+# LLM 语义裁剪（一句话描述保留什么）
+python utils/funclip.py smart long.wav -i "只要讲龙的部分，去掉口误" -o dragon.wav
+# API 异步裁剪（提交后轮询 /api/clip/{job_id}）
+curl -X POST http://127.0.0.1:8894/api/clip \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"/path/long.wav","instructions":"只要讲龙的部分","output":"dragon.wav"}'
+
+# v5 素材爬取（参考图 + BGM）
+# LLM concept → 图片搜索关键词
+python utils/asset_crawler.py keywords "雪山上的日出小狐狸"
+# concept → 关键词 → 图片下载（一条龙）
+python utils/asset_crawler.py refs "雪山上的日出小狐狸" -o output/ref/ --top 2
+# BGM：列候选 / 下载（→ bgm/{mood}.wav，--bgm epic 直接生效）
+python utils/asset_crawler.py bgm epic --list
+python utils/asset_crawler.py bgm epic

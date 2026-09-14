@@ -1,6 +1,6 @@
 # Vidance v4 使用指南 — 营销号流水线小工具
 
-> v4 三个里程碑（M1 爬虫选题 / M2 异步任务队列 / M3 声音克隆）的逐个小步骤使用方法。
+> v4 五个里程碑（M1 爬虫选题 / M2 异步任务队列 / M3 声音克隆 / M4 FunClip 智能裁剪 / M5 素材爬取）的逐个小步骤使用方法。
 >
 > 主入口使用见 [usage.md](./usage.md)，设计见 [v4-design.md](./v4-design.md)
 
@@ -14,6 +14,8 @@
 | M2 | `core/api_server.py` | FastAPI REST 服务（:8894） |
 | M2 | `core/dashboard.py` | HTML 仪表盘生成 |
 | M3 | `utils/voice_clone.py` | 爬人声 → 自动克隆 CosyVoice 音色 |
+| M4 | `utils/funclip.py` | 长素材 ASR 转写 + 字级时间戳 + LLM 语义裁剪 |
+| M5 | `utils/asset_crawler.py` | 参考图搜索下载 + LLM 关键词 + BGM 免版权爬曲 |
 
 ---
 
@@ -200,6 +202,8 @@ python core/api_server.py --port 8894
 | GET | `/api/clone_voice/{job_id}` | 查询克隆任务 |
 | GET | `/api/voices` | 已注册自定义音色 |
 | GET | `/api/dashboard` | HTML 仪表盘 |
+| POST | `/api/clip` | FunClip 长素材语义裁剪（异步） |
+| GET | `/api/clip/{job_id}` | 查询裁剪任务 |
 
 ### 提交任务
 
@@ -247,6 +251,22 @@ curl http://127.0.0.1:8894/api/clone_voice/voice_20260913_110434
 ```
 
 body 字段：`keyword`（搜索词，默认"新闻播报"）/ `name`（音色名，空则自动时间戳）/ `index`（用第 N 个搜索候选）/ `desc`（描述）/ `reload_tts`（克隆后热加载 TTS，默认 true）
+
+### 长素材裁剪（异步）
+
+```bash
+# 提交（ASR 转写 + LLM 判定 + 裁剪，约 30s-2min）
+curl -X POST http://127.0.0.1:8894/api/clip \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"/path/long.wav","instructions":"只要讲龙的部分，去掉口误","output":"dragon.wav"}'
+# → {"job_id":"clip_20260913_192833","status":"running"}
+
+# 轮询
+curl http://127.0.0.1:8894/api/clip/clip_20260913_192833
+# → {"status":"completed","output":".../output/dragon.wav","segments":[[0.1,3.05],...],"keep":[true,false,...]}
+```
+
+body 字段：`input`（长素材路径，必填）/ `instructions`（保留/删除语义，必填）/ `output`（输出文件名，相对路径落 output_dir，空则源文件旁 `*_clipped`）/ `use_llm`（默认 true）
 
 ### 数据落盘
 
@@ -356,6 +376,138 @@ curl -X POST http://127.0.0.1:9880/voices/reload    # 热加载
 
 ---
 
+## M4 — FunClip 智能裁剪（utils/funclip.py）
+
+长素材（长旁白录制/爬取的长视频）语义裁剪：FunASR 转写 + 字级时间戳 → LLM 判断每句保留/删除 → ffmpeg 裁剪拼接。
+
+- **场景 1**：长旁白录制有口误 → 按语义去口误段
+- **场景 2**：爬取长视频素材 → 按内容提取关键段
+
+### CLI
+
+```bash
+cd /mnt/disk_sdb/zxy/vidance
+
+# [1] 转写：显示字级时间戳（模型首次自动下载 ~1.1GB，之后走本地缓存）
+python utils/funclip.py transcribe output/clips/narration.wav
+# → 在无边的深蓝里光从寂静中诞生
+# → 共 14 字, 首字 130ms, 末字 2965ms
+
+# 按句显示（字级时间戳按停顿聚合成句）
+python utils/funclip.py transcribe narration.wav --sentences
+# → [0.13-3.05] 在无边的深蓝里光从寂静中诞生
+
+# [2] 手动按时段裁剪拼接（秒，支持视频或纯音频，输出格式自动匹配）
+python utils/funclip.py clip long.mp4 --segments "0-3,5-8" -o clipped.mp4
+
+# [3] LLM 语义裁剪（一句话描述要保留什么，LLM 逐句判定）
+python utils/funclip.py smart long.wav -i "只要讲龙的部分，去掉口误" -o dragon.wav
+
+# 跳过 LLM（全保留，仅转写+聚合调试用）
+python utils/funclip.py smart long.wav -i "..." -o out.wav --no-llm
+```
+
+### Python API
+
+```python
+from utils.funclip import FunClip
+
+fc = FunClip()   # device='auto' 自动选空闲显存最多的 GPU
+
+# 1. 转写 → 字级时间戳
+chars = fc.transcribe('long.wav')
+# → [{'char':'在','start_ms':130,'end_ms':350}, ...]
+
+# 2. 字级聚合成句
+sents = fc.to_sentences(chars)
+# → [{'text':'在无边的深蓝里...','start_ms':130,'end_ms':3050}, ...]
+
+# 3. 按时段裁剪（视频保留画面，音频仅声音）
+fc.clip_segments('long.wav', [(0.1, 3.0), (5.0, 8.0)], 'clipped.wav')
+
+# 4. LLM 语义裁剪（llm 传 utils.llm.LLMClient）
+from utils.llm import LLMClient
+r = fc.smart_clip('long.wav', '只要讲龙的画面，去掉口误', 'out.wav', llm=LLMClient())
+# → {'segments': [(s,e),...], 'sentences': [...], 'keep': [bool,...], 'duration_ms': ...}
+```
+
+### 参数与行为
+
+| 项 | 说明 | 默认 |
+|----|------|------|
+| `device` | `auto` 自动选空闲显存最多的卡（逐卡探测，满卡自动跳过）；或显式 `cuda:N` | `auto` |
+| `to_sentences(gap_ms)` | 字间停顿超过该值视为句边界 | `300` |
+| `smart_clip(pause_ms)` | 保留段之间吸收的静音上限（防生硬） | `400` |
+| 输入格式 | 视频（保留画面 yuv420p/High）或纯音频（输出 pcm_s16le wav）自动探测 | — |
+
+> **模型**：`iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch`（FunASR 官方带字级时间戳的组合模型，首次运行自动下载到 `~/.cache/modelscope/`）。注意必须 `return_raw=True + batch_size_s=300` 才返回字级 timestamp。
+> **GPU 注意**：满卡（如 GPU0 被 H3 占满）连 CUDA context 都建不出来，`device='auto'` 会逐卡探测并跳过，不会让进程崩掉。
+
+---
+
+## M5 — 素材爬取（utils/asset_crawler.py）
+
+参考图 + BGM 两类素材自动爬取（人声样本已在 M3 voice_clone.py 完成）：
+
+- **参考图**：必应图片搜索（cn.bing.com 直连可达，原图直链 murl）→ magic bytes 校验 + md5 去重 → 任务参考图目录
+- **BGM**：incompetech.com（Kevin MacLeod CC BY，直连可达）按 feel 标签搜曲 → 下载 → loudnorm I=-20 → `bgm/{mood}.wav`
+
+### CLI
+
+```bash
+cd /mnt/disk_sdb/zxy/vidance
+
+# [1] LLM concept → 图片搜索关键词
+python utils/asset_crawler.py keywords "雪山上的日出小狐狸"
+# → ['雪山之巅金色晨曦狐狸剪影', '雪峰日出霞光狐狸遥望', ...]
+
+# [2] 按关键词搜图下载（必应，magic bytes 校验 + md5 去重）
+python utils/asset_crawler.py images "深海水母" -o output/ref/ --top 5
+
+# [3] concept → 关键词 → 图片下载（一条龙）
+python utils/asset_crawler.py refs "雪山上的日出小狐狸" -o output/ref/ --top 2
+
+# [4] BGM：只列候选 / 下载（→ bgm/{mood}.wav，select_bgm 自动识别）
+python utils/asset_crawler.py bgm epic --list
+python utils/asset_crawler.py bgm epic --max-dur 180
+```
+
+### Python API
+
+```python
+from utils.asset_crawler import AssetCrawler
+from utils.llm import LLMClient
+
+ac = AssetCrawler()
+
+# 参考图
+kws = ac.extract_keywords('深海里发光的水母', llm=LLMClient())
+# → ['深海水母发光', ...]
+items = ac.download_images('深海水母', 'output/ref/', top=5)
+# → [{'path': '/abs/深海水母_1.jpg', 'url': 'http://...', 'size': 43000}, ...]
+items = ac.crawl_concept_refs('概念', 'output/ref/', top=2, llm=LLMClient())  # 一条龙
+
+# BGM
+cands = ac.search_bgm('epic', max_dur=180)   # 候选列表
+path = ac.crawl_bgm('epic')                  # 下载+loudnorm → bgm/epic.wav
+```
+
+### 细节与注意
+
+| 项 | 说明 |
+|----|------|
+| 图片源 | 必应图片 async 接口（`cn.bing.com/images/async`，直连可达）；百度 acjson 接口需真 cookie 已弃用 |
+| 图片校验 | magic bytes（JPEG/PNG/WebP/GIF/BMP）+ ≥8KB + md5 去重 |
+| BGM 源 | `bgm/pieces.json`（incompetech 曲目目录缓存，1442 首）；URL 格式 `mp3-royaltyfree/{filename}`，**filename 自带 `.mp3` 后缀不可重复拼** |
+| BGM 时长 | `length` 字段为 `HH:MM:SS` 格式；按"越接近 60s 越好"排序（避免 200MB 巨物 + 太短不够用） |
+| BGM 响度 | loudnorm I=-20:TP=-1.5:LRA=11，与现有 bgm/*.wav 一致 |
+| mood 映射 | 标准 mood（calm/uplifting/mysterious/dramatic/playful/epic/sad/tense）→ feel 搜索词，未知 mood 直接当 feel 搜 |
+
+> **BGM 使用**：爬下来的 `bgm/{mood}.wav` 自动被 `select_bgm` 的 custom_dir 优先逻辑使用（`--bgm epic` 直接生效），无需改代码。
+> **参考图用途**：custom 模式 `--ref` 输入、或人工挑选后做 I2V 条件帧。
+
+---
+
 ## 典型工作流：热点 → 成片（全链路）
 
 ```bash
@@ -390,4 +542,6 @@ curl http://127.0.0.1:8894/api/tasks/{task_id}
 | api_server 本身 | 无外部依赖（SQLite） | 8894 |
 | voice_clone（下载/切段/转写） | yt-dlp + faster-whisper（内嵌 GPU）+ ffmpeg | — |
 | voice_clone（测试合成） | TTS server | 9880 |
+| funclip | FunASR paraformer（内嵌 GPU，自动选卡）+ ffmpeg + USTC LLM API（smart 子命令） | — |
+| asset_crawler | cn.bing.com（图片）+ incompetech.com（BGM）+ USTC LLM API（keywords/refs） | — |
 | TTS server | CosyVoice2（GPU2）+ edge-tts（在线） | 9880 |
