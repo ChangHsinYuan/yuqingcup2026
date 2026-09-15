@@ -11,8 +11,24 @@
 ## 0、可视化效果
 
 - v0：初步简陋的流程：
-[v0](./assets/final_moe.mp4)
+[v0](./assets/v0.mp4)
+- v1：3dgs/f;ux加入
+[v1](./assets/v13dgs.mp4)
+[v1](./assets/v1flux.mp4)
+- v2：
+[v2](./assets/v2.mp4)
+- v3：
+[v3](./assets/v3.mp4)
+- v4：
+[v4](./assets/v4.mp4)
+- v5：
+[v5](./assets/v5.mp4)
+- v6：
+<img src="./assets/v6_demo.jpg">
+- v7：
+<img src="./assets/v7_demo.png">
 
+更多demo参看PPT
 
 ## 1、项目构思
 
@@ -40,19 +56,22 @@
 
 
 ### 2、已完成
-- 初步拼接：但是并没有那么自然
-- 模型部署：minimaxH3和qwen3.6-35B-A3B均已部署，底层支持Loop了。现在生成模型的还部署了Wan2.2和Hunyuan，生图的部署了SDXL和FLUX，然后TTS的部署了CosyVoice，然后多模态llm-api接的是ustc的api，其中那些claude系的其实都是qwen之类的不过无所谓了
 
+<img src="./assets/v0.png">
+<img src="./assets/v1.png">
+<img src="./assets/v2.png">
+<img src="./assets/v3.png">
+<img src="./assets/v4.png">
+<img src="./assets/v5.png">
+<img src="./assets/v6.png">
+<img src="./assets/v7.png">
 
-    cd /mnt/disk_sdb/zxy/vidance && /home/zxy/.conda/envs/comfyui/bin/python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode 3dgs --voice edge-xiaoxiao
-
-    cd /mnt/disk_sdb/zxy/vidance && /home/zxy/.conda/envs/comfyui/bin/python core/pipeline.py "一只猫在月球上跳舞" --character "穿宇航服的白猫" --character-mode flux --voice edge-xiaoxiao
 
 ### 3、发现的问题
-- v0暂时还不错，慢慢改呗
-- 现在就是拼接过渡还不够自然，这个的话还是要思考一下，比如加点特效硬过渡（特效转场）或者软过渡（光流切换）
-- 。。。
 
+- 微信/飞书网关
+- 长片质量
+- 推理轻量化
 
 ### 4、计划路线
 
@@ -67,11 +86,13 @@
 ## 2、组织架构
 
 - assets：写README的资产
+- bgm：存放bgm的
 - config：配置目录，存放json配置API-key以及
 - core：核心引擎
 - docs：说明文档
 - input：输入，比如参考帧啥的
 - output：输出，比如视频啥的，（很多视频文件，所以是软链接过来的）
+- tools：工具
 - ui：前端
 - utils：被引擎调用的工具
 - voice_samples：音频样本，如果想要cosyvoice处理TTS就把你拿下来的wav放这里，当然也可以考虑支持自己爬，也是软连接
@@ -80,7 +101,6 @@
 
 ## 3、部署应用
 
-全部搞完再考虑docker部署或者接入消息网关或者机器人之类的
-
-
+面向**开发者**：docs下面有。参考roadmap和usage那些
+面向**用户**：webUI（v7）、微信/飞书机器人（v9）
 
