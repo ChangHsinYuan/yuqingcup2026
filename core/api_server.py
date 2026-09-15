@@ -295,6 +295,47 @@ def get_clip(job_id: str):
     return job
 
 
+# ══ v6 prompt 多轮核实 dialog 端点 ══
+
+class DialogStart(BaseModel):
+    concept: str
+
+
+class DialogReply(BaseModel):
+    text: str
+
+
+@app.post('/api/dialog/start')
+def dialog_start(req: DialogStart):
+    """启动多轮需求核实会话 → {dialog_id, status, missing, questions, concept}"""
+    from utils.dialog import DialogManager
+    dm = DialogManager()
+    s = dm.start(req.concept)
+    return {'dialog_id': s['dialog_id'], 'status': s['status'],
+            'dimensions': s['dimensions'], 'missing': s['missing'],
+            'questions': s['questions'], 'concept': s['concept']}
+
+
+@app.get('/api/dialog/{dialog_id}')
+def dialog_get(dialog_id: str):
+    from utils.dialog import DialogManager
+    dm = DialogManager()
+    s = dm.get(dialog_id)
+    if not s:
+        raise HTTPException(status_code=404, detail='dialog not found')
+    return s
+
+
+@app.post('/api/dialog/{dialog_id}/reply')
+def dialog_reply(dialog_id: str, req: DialogReply):
+    from utils.dialog import DialogManager
+    dm = DialogManager()
+    s = dm.reply(dialog_id, req.text)
+    if 'error' in s:
+        raise HTTPException(status_code=404, detail=s['error'])
+    return s
+
+
 if __name__ == '__main__':
     import uvicorn
 

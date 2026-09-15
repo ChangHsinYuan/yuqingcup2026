@@ -1,7 +1,8 @@
 # Vidance v6 设计文档 — prompt 多轮核实
 
 > 仓库版本号 v6（紧接 v5 之后）。
-> 状态：🚧 M1-M2 完成（`llm.assess_completeness()` 6 维评估 + `utils/dialog.py` 状态机），M3(M3 CLI ask/--interactive)/M4(API) 待做。
+> 状态：✅ 完成（M1-M4，2026-09-14；2026-09-15 修复多轮循环）。M1 `llm.assess_completeness()` 6 维评估；M2 `utils/dialog.py` 状态机（≤3 轮，SQLite dialogs 表）；M3 `vidance.py ask` 交互式（每轮批量问完合并 reply）；M4 API 三端点 `POST /api/dialog/start` + `GET /api/dialog/{id}` + `POST /api/dialog/{id}/reply`（start/reply 实测，reply 每轮返回增强 concept）。
+> 修正（2026-09-15）：①`cmd_ask` idx 跨轮累加导致只问一条就退出 → 重构为每轮把当前问题问完、`；`合并成一条 reply 一次重评；②选填维度（style/duration/shot）被当必填判 → 只以必填维度（subject/scene/emotion）判 COMPLETE；③评估口径收紧：明确描述才算已具备（"灯塔"隐含海边不算），temperature 0.3→0.1；④停止条件过松（必填 3 维齐即 COMPLETE，2 问就停、prompt 长不起来）→ 最终改为**全 6 维齐才 COMPLETE**，style/duration/shot 也纳入追问，prompt 经 2-3 轮逐步变长变详细。
 
 ---
 

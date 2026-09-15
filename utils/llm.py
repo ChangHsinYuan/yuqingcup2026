@@ -456,8 +456,11 @@ class LLMClient:
             'style(视觉风格)、duration(目标时长)、shot(镜头感/运镜)。\n'
             '规则：\n'
             '- subject/scene/emotion 是内容类，缺失必须追问；\n'
-            '- style/duration/shot 是可选类，缺失不算严重（可用默认），但也可提示；\n'
-            '- 若用户说"随便"或已隐含，算不缺。\n'
+            '- subject/scene/emotion 需要【明确描述】才算已具备；仅从名词隐含推测'
+            '（如"灯塔"隐含海边、"猫"隐含室内）不算已具备；\n'
+            '- style/duration/shot 也需要补齐：缺失时列入 missing 并给出提示问题'
+            '（如建议视觉风格/目标时长/运镜方式）；\n'
+            '- 若用户说"随便"算不缺。\n'
             '输出JSON：{"dimensions":{"subject":1,"scene":0,...},"missing":["场景/环境"],'
             '"questions":["大概是什么场景？"]}。subject/scene/emotion 必须有缺失项追问。'
         )
@@ -465,7 +468,7 @@ class LLMClient:
             r = self.chat_json([
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': f'概念：{prompt}'},
-            ], model=self.models['prompt_opt'], temperature=0.3, timeout=60, retries=1)
+            ], model=self.models['prompt_opt'], temperature=0.1, timeout=60, retries=1)
         except Exception:
             return {'complete': True, 'dimensions': dict.fromkeys(dims, 1),
                     'missing': [], 'questions': []}
@@ -477,6 +480,7 @@ class LLMClient:
         for d in ('subject', 'scene', 'emotion'):
             if not vals.get(d) and not any(dim_cn[d] in m for m in missing):
                 vals[d] = 0
+        # 全 6 维都齐才 complete：prompt 靠多轮追问变长变详细，style/duration/shot 也纳入追问
         complete = all(vals.values())
         return {'complete': complete, 'dimensions': vals,
                 'missing': missing, 'questions': questions}

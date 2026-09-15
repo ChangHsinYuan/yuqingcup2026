@@ -100,7 +100,11 @@ class DialogManager:
         dims = dict(rec['dimensions'])
         dims.update(assess['dimensions'])
         missing = assess['missing']
-        status = 'COMPLETE' if all(dims.values()) else ('COLLECTING' if rounds > 1 else 'OPEN')
+        # 与 assess_completeness 同口径：全 6 维齐才 COMPLETE（prompt 靠多轮追问变长变详细），
+        # 3 轮上限 LOCKED 强制放行
+        status = ('COMPLETE' if all(dims.get(d, 0) for d in
+                                     ('subject', 'scene', 'emotion', 'style', 'duration', 'shot'))
+                  else ('COLLECTING' if rounds > 1 else 'OPEN'))
         if rounds >= MAX_ROUNDS:
             status = 'LOCKED'  # 轮次上限，强制放行
         with self._conn() as c:
@@ -110,9 +114,8 @@ class DialogManager:
                  status, datetime.now().isoformat(), dialog_id))
         out = {'dialog_id': dialog_id, 'status': status, 'turns': turns,
                'dimensions': dims, 'missing': missing,
-               'questions': assess['questions']}
-        if status in ('COMPLETE', 'LOCKED'):
-            out['concept'] = self.locked_concept(dialog_id)
+               'questions': assess['questions'],
+               'concept': self.locked_concept(dialog_id)}
         return out
 
     # ══ 增强概念 ══

@@ -237,6 +237,54 @@ def cmd_fast(args):
     print(f'\nDone: {meta["output"]}')
 
 
+def cmd_ask(args):
+    """ask 子命令：prompt 多轮核实（v6）——交互式补齐缺失维度 → 输出增强概念。
+
+    若概念已完整则直接回传；否则按轮追问：每轮把当前问题逐条问完，
+    合并成一条 reply 重新评估（≤3 轮）。--out 可存增强概念。
+    """
+    from utils.dialog import DialogManager, MAX_ROUNDS
+    dm = DialogManager()
+    s = dm.start(args.concept)
+    print(f'\n[ask] 完整度评估: {s["status"]}')
+    print(f'  缺失: {s["missing"]}')
+    cur = s
+    rounds = 0
+    while (cur['status'] not in ('COMPLETE', 'LOCKED')
+           and cur.get('questions') and rounds < MAX_ROUNDS):
+        # 本轮：把当前轮的问题逐条问完
+        answers = []
+        quit_ask = False
+        for q in cur['questions']:
+            print(f'\n问: {q}')
+            try:
+                ans = input('答: ').strip()
+            except EOFError:
+                print('\n(输入结束)')
+                quit_ask = True
+                break
+            if ans.lower() in ('q', 'quit', 'exit'):
+                quit_ask = True
+                break
+            # "随便/都可以"类回答跳过（不进概念，也不阻塞本轮）
+            if ans and ans not in ('随便', '都可以', '随便吧'):
+                answers.append(ans)
+        if quit_ask or not answers:
+            break
+        # 合并本轮回答 → 一次重评
+        cur = dm.reply(cur['dialog_id'], '；'.join(answers))
+        rounds += 1
+    concept = dm.locked_concept(cur['dialog_id'])
+    print(f'\n[ask] 状态: {cur["status"]}')
+    print(f'增强概念: {concept}')
+    out = args.out
+    if out:
+        with open(out, 'w', encoding='utf-8') as f:
+            f.write(concept)
+        print(f'已存: {out}')
+    return concept
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog='vidance',
@@ -389,6 +437,13 @@ def build_parser():
     p_fast.add_argument('--task-id', default=None,
                         help='外部指定 task_id（调度器传入）')
     p_fast.set_defaults(func=cmd_fast)
+
+    # ── ask 子命令（v6 prompt 多轮核实） ──
+    p_ask = sub.add_parser('ask', help='prompt 多轮核实：交互补齐缺失维度 → 增强概念')
+    p_ask.add_argument('concept', help='原始概念（中文）')
+    p_ask.add_argument('--out', default=None,
+                       help='输出增强概念到文件（否则打印 stdout）')
+    p_ask.set_defaults(func=cmd_ask)
 
     return parser
 

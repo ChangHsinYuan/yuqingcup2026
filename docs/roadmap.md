@@ -309,7 +309,7 @@
 
 ---
 
-### v6 — prompt 多轮核实（🚧 M1-M2 完成，M3-M4 待做）
+### v6 — prompt 多轮核实（✅ M1-M4 完成）
 
 
 **目标**：prompt 信息不全时打回，多轮对话核实用户详细需求，避免"不是很清楚就硬做"。
@@ -319,9 +319,10 @@
 **进度**：
 - **M1 完整度评估** ✅：`llm.assess_completeness()` 6 维 + 缺失项 + 追问建议（异常兜底当 complete）
 - **M2 对话状态机** ✅：`utils/dialog.py`（DialogManager，OPEN/COLLECTING/COMPLETE/LOCKED，≤3 轮，SQLite `output/tasks.sqlite` dialogs 表）
-- M3 CLI `ask`/`--interactive` + 增强概念注入 ｜ M4 API 三端点
+- **M3 CLI `ask`** ✅：`vidance.py ask` 交互多轮（input 循环 + `--out` 存增强概念），管道答案实测通过；`dm.locked_concept` 拼接轮次回答
+- **M4 API 三端点** ✅：api_server.py `POST /api/dialog/start`（返回 missing/questions）+ `GET /api/dialog/{id}` + `POST /api/dialog/{id}/reply`（每轮返回增强 concept），start/reply curl 实测通过
 
-**详细设计**：见 [v6-design.md](./v6-design.md)
+**详细设计**：见 [v6-design.md](./v6-design.md)（✅ M1-M4 完成）
 
 ---
 
@@ -457,7 +458,7 @@ vidance/
 │   ├── v3-design.md           # v3 2D→3D→新视角设计（✅ M0-M7 完成，M8 跳过）
 │   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M6 完成）
 │   ├── v5-design.md           # v5 剪辑特效包（✅ M1-M4 完成）
-│   ├── v6-design.md           # v6 prompt 多轮核实（🚧 M1-M2 完成，M3-M4 待做）
+│   ├── v6-design.md           # v6 prompt 多轮核实（✅ M1-M4 完成）
 │   ├── v7-design.md           # v7 前端 agent WebUI（🎯 待开发）
 │   ├── v8-design.md           # v8 一镜到底（🎯 待开发）
 │   ├── v9-design.md           # v9 机器人网关（多 IM：企微/飞书/钉钉…，🎯 待开发）

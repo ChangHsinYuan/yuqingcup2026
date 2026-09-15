@@ -8,9 +8,9 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6 完成 M1-M2（6 维评估 + 对话状态机）+ v7/v8/v9 文档已就绪**（2026-09-14）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6 prompt 多轮核实完成（M1-M4）+ v7/v8/v9 文档已就绪**（2026-09-14）。
 
-**版本路线**：v4 营销号流水线（fast/hot 爬图出片）→ v5 剪辑特效 → v6 prompt 多轮核实（进行中）→ v7 前端 agent WebUI（仿豆包，左栏+画布+发框+`/`命令调 tool）→ v8 一镜到底 → v9 机器人网关（企微/飞书/钉钉…）。
+**版本路线**：v4 营销号流水线（fast/hot 爬图出片）→ v5 剪辑特效 → v6 prompt 多轮核实（ask 交互 + dialog API）→ v7 前端 agent WebUI（仿豆包，左栏+画布+发框+`/`命令调 tool）→ v8 一镜到底 → v9 机器人网关（企微/飞书/钉钉…）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -48,6 +48,14 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M3 LLM 自动选** ✅：`llm.select_effects()` 按每镜内容/情绪选特效 + 镜头间转场（`fast/hot --effects auto`，pipeline 内 `apply_effects_to_clips` 施加，失败回退原片）
 - **M4 端到端** ✅：`fast "夜色中城市霓虹与火光" --effects auto` 3 镜 → LLM 选 glitch/grain_vignette/freeze_zoom → 9.0s 成片；meta 记录 effects/transitions。xfade 链式拼接 3 clip 5.2s 验证通过
 - **修正**：①flash 用 `fade=in` 纯色淡入（修 eq/drawbox 语法错）；②glitch 去 rgbashift（该 ffmpeg 无此滤镜）改 noise+hue 抖动；③wipe/zoom warp 表达式用 `t`/`on` 正确写法
+
+**v6 prompt 多轮核实**（M1-M4 完成，2026-09-14；2026-09-15 修复多轮循环）：
+- **M1 完整度评估** ✅：`llm.assess_completeness()` 6 维（主体/场景/情绪/风格/时长/镜头感）+ missing 列表 + 追问建议（异常兜底当 complete）。**口径**：subject/scene/emotion 必填需明确描述（仅名词隐含推测不算）；style/duration/shot 也纳入追问——**全 6 维齐才 COMPLETE**（prompt 靠多轮追问变长变详细）；temperature=0.1
+- **M2 对话状态机** ✅：`utils/dialog.py`（DialogManager，OPEN/COLLECTING/COMPLETE/LOCKED，≤3 轮防死循环，SQLite `output/tasks.sqlite` dialogs 表）
+- **M3 CLI `ask`** ✅：`vidance.py ask "概念"` 交互多轮追问 → 增强概念（`--out` 存文件）；**每轮把当前问题逐条问完合并成一条 reply**（`；`拼接）→ 一次重评；管道答案实测通过；`dm.locked_concept` 拼接轮次回答（"随便"跳过）
+- **M4 API 三端点** ✅：`core/api_server.py` 加 `POST /api/dialog/start`（返回 missing/questions）+ `GET /api/dialog/{dialog_id}` + `POST /api/dialog/{dialog_id}/reply`（每轮返回增强 concept），供 v7 前端调用；start/reply curl 实测通过
+- **修复（2026-09-15）**：①cmd_ask idx 跨轮累加导致只问一条就退出 → 重构为每轮批量问完再 reply；②选填维度被当必填判 → missing=[] 卡 COLLECTING → 只以必填维度判 COMPLETE；③评估口径"已隐含算不缺"→"明确描述才算"（temperature 0.3→0.1）；④停止条件过松（必填 3 维齐即 COMPLETE，2 问就停 prompt 长不起来）→ 改为**全 6 维齐才 COMPLETE**，style/duration/shot 也追问，概念经 2-3 轮逐步变长
+- 不做自动补全（宁可多问）；≤3 轮 LOCKED 强制放行
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -92,7 +100,7 @@ vidance/
 │   ├── asset_crawler.py       # v4 素材爬取（Pexels 图源首选 + 必应兜底 + LLM关键词 + incompetech BGM，M5 已封装）
 │   ├── fastline.py            # v4 M6 快速营销号链路（图片+zoompan 运镜+RIFE，跳过视频模型，M6 已封装）
 │   ├── effects.py             # v5 剪辑特效（8 种镜头内特效 + xfade 链式转场，M1-M4 已实现）
-│   ├── dialog.py              # v6 prompt 多轮核实状态机（DialogManager，SQLite，M1-M2 已实现）
+│   ├── dialog.py              # v6 prompt 多轮核实状态机（DialogManager，SQLite，M1-M4 已实现）
 │   ├── oneshot.py             # v8 一镜到底（链式 I2V 末帧回灌 + 运镜脚本 + 漂移控制；🎯 待实现）
 │   ├── notify/                # v9 机器人网关（base/wecom/feishu/dingtalk/factory；🎯 待实现）
 │   ├── luts/                  # v2 LUT 文件目录（cinematic/warm/cool/vintage/vivid/soft .cube）
@@ -110,7 +118,7 @@ vidance/
 │   ├── agents/{director,reviewer,asset,scout}.md
 │   └── skills/{scriptwriting,review,topic_scouting}/SKILL.md
 ├── docs/                      # 设计文档（roadmap + v0-v9 design + deployed-models）
-│   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4.md 分版本小工具）
+│   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4/v6.md 分版本小工具）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
 ```
@@ -404,10 +412,14 @@ python core/vidance.py fast "概念" --images dir/ --effects auto       # LLM �
 python utils/effects.py apply in.mp4 --effect punch_in -o out.mp4     # 单片段特效
 python utils/effects.py transition a.mp4 b.mp4 --kind slide -o out.mp4 # xfade 双段拼接
 
-# ── 已规划（🎯 待实现，见 docs/v5-design.md ~ v8-design.md）──
-# v5 剪辑特效（--effects auto 由 LLM 自动选每镜特效+转场）
-# python core/vidance.py auto "概念" --character "角色" --effects auto
-# v6 prompt 多轮核实（对话补全后进编剧流水线）
-# python core/vidance.py ask "深海探险" / python core/vidance.py auto "深海探险" --interactive
+# v6 prompt 多轮核实（信息不全时追问，增强后概念可喂 auto/fast）
+python core/vidance.py ask "深海探险"                 # 交互多轮追问（≤3 轮），--out 存增强概念
+python core/vidance.py ask "深海探险" --out input/concept.txt
+# dialog API（v7 前端用）
+curl -X POST http://127.0.0.1:8894/api/dialog/start -H 'Content-Type: application/json' -d '{"concept":"深夜灯塔"}'
+curl -X POST http://127.0.0.1:8894/api/dialog/dlg_xxx/reply -H 'Content-Type: application/json' -d '{"text":"暴风雨夜，灯塔守护人独自值班"}'
+
+# ── 已规划（🎯 待实现，见 docs/v7-design.md ~ v8-design.md）──
+# v7 前端 agent WebUI（仿豆包对话式，零 npm 自包含 HTML）
 # v8 一镜到底（链式 I2V 拼缝隐形，30s+）
 # python core/vidance.py auto "穿越隧道的光" --oneshot --duration 30
