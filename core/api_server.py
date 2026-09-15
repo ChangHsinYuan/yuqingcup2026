@@ -433,9 +433,28 @@ TOOLS = [
          {'key': '-n', 'type': 'number', 'desc': '候选数'},
      ]},
     {'name': 'voices', 'help': '列出已注册音色', 'params': []},
+    {'name': 'luts', 'help': '列出可用的调色风格（LUT）', 'params': []},
+    {'name': 'moods', 'help': '列出可用的 BGM 配乐情绪', 'params': []},
     {'name': 'video', 'help': '播放成片',
      'params': [
          {'key': 'task_id', 'type': 'text', 'required': True, 'desc': '任务 ID'},
+     ]},
+    {'name': 'tasks', 'help': '列出最近任务',
+     'params': [
+         {'key': '-n', 'type': 'number', 'desc': '条数（默认 10）'},
+         {'key': '--status', 'type': 'text', 'desc': '按状态筛选：queued/running/completed/failed'},
+     ]},
+    {'name': 'status', 'help': '查询单个任务详情',
+     'params': [
+         {'key': 'task_id', 'type': 'text', 'required': True, 'desc': '任务 ID'},
+     ]},
+    {'name': 'trends', 'help': '爬取实时热点（不选题，直接看热榜）',
+     'params': [
+         {'key': '--top', 'type': 'number', 'desc': '每源条数（默认 10）'},
+     ]},
+    {'name': 'clean', 'help': '清理旧任务输出（默认保留最近 10 个，--keep 可改）',
+     'params': [
+         {'key': '--keep', 'type': 'number', 'desc': '保留最近 N 个（默认 10）'},
      ]},
     {'name': 'help', 'help': '列出全部 / 命令', 'params': []},
 ]
@@ -521,6 +540,46 @@ def tool_dispatch(name: str, req: ToolRequest):
             raise HTTPException(status_code=404, detail='Task not found')
         return {'message': f'任务 {task_id} 状态 {task["status"]}',
                 'task': task, 'video_url': f'/api/video/{task_id}'}
+
+    # ── luts / moods / tasks / status / trends / clean ──
+    if name == 'luts':
+        cfg = load_config()
+        return {'message': '可用 LUT 风格', 'luts': cfg.get('color', {}).get('styles', ['cinematic'])}
+    if name == 'moods':
+        cfg = load_config()
+        return {'message': '可用 BGM 情绪', 'moods': cfg.get('bgm', {}).get('moods', ['calm'])}
+    if name == 'tasks':
+        st = flags.get('status')
+        n = int(flags.get('n', 10))
+        rows = queue.list_tasks(status=st, limit=n)
+        return {'message': f'共 {len(rows)} 个任务', 'tasks': rows}
+    if name == 'status':
+        if not pos:
+            raise HTTPException(status_code=400, detail='用法: /status {task_id}')
+        task = queue.get_task(pos[0])
+        if not task:
+            raise HTTPException(status_code=404, detail='Task not found')
+        return {'message': f'任务 {pos[0]} 状态 {task["status"]}', 'task': task}
+    if name == 'trends':
+        from utils.crawler import Crawler
+        top = int(flags.get('top', 10))
+        topics = Crawler().fetch_hot_topics(top_per_source=top)
+        return {'message': f'抓取到 {len(topics)} 条热点', 'topics': topics}
+    if name == 'clean':
+        keep = int(flags.get('keep', 10))
+        import glob as _glob
+        out_root = os.path.join(os.path.dirname(__file__), '..', 'output')
+        dirs = sorted(_glob.glob(os.path.join(out_root, '2*')), key=os.path.getmtime, reverse=True)
+        to_del = dirs[keep:]
+        removed = []
+        for d in to_del:
+            try:
+                import shutil as _sh
+                _sh.rmtree(d)
+                removed.append(os.path.basename(d))
+            except Exception as e:
+                print(f'  ⚠ clean failed {d}: {e}')
+        return {'message': f'清理 {len(removed)} 个旧任务，保留 {keep} 个', 'removed': removed}
 
     # ── ask（v6 dialog）──
     if name == 'ask':

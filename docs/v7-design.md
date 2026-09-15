@@ -1,7 +1,7 @@
 # Vidance v7 设计文档 — 前端（agent WebUI）
 
 > 仓库版本号 v7（紧接 v6 之后）。
-> 状态：🚧 M1-M4 代码完成（2026-09-15）。后端新端点全部 curl 实测（tools/options/tool 分发 9 命令/video 流/ask 接 v6 dialog）；前端 `ui/index.html` 自包含（零 npm，21KB）+ JS 语法 node 校验通过；**全服务关停联测通过**：fast 任务降级跑完（TTS 缺省静音 + Pexels 照常）→ 6.0s 成片 completed → video 流 200，前端三类卡片数据形态齐验；浏览器渲染与真声 TTS 出片待 GPU 恢复验证。
+> 状态：🚧 M1-M4 代码完成（2026-09-15）。后端新端点全部 curl 实测（tools/options/tool 分发 **15 命令**/video 流/ask 接 v6 dialog；2026-09-15 新增 6 个查询/维护命令 luts/moods/tasks/status/trends/clean 全零 GPU 可测）；前端 `ui/index.html` 自包含（零 npm，21KB）+ JS 语法 node 校验通过；**全服务关停联测通过**：fast 任务降级跑完（TTS 缺省静音 + Pexels 照常）→ 6.0s 成片 completed → video 流 200，前端三类卡片数据形态齐验；浏览器渲染与真声 TTS 出片待 GPU 恢复验证。
 
 ---
 

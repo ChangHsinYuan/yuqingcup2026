@@ -60,7 +60,7 @@ http://127.0.0.1:8894/ui
 ## 后端端点（前端依赖的 API 契约）
 
 ```
-GET  /api/tools               # [{name, help, params[]}] 9 命令
+GET  /api/tools               # [{name, help, params[]}] 15 命令
 GET  /api/options             # {voices, luts, bgms, effects, motions, ...}
 GET  /api/video/{task_id}     # 成片视频流（FileResponse final.mp4）
 POST /api/tool/{name}         # 统一分发 body: {args: "概念 --key value"}
@@ -75,7 +75,7 @@ POST /api/scout               # 选题候选
 
 ## 验证记录（2026-09-15）
 
-- 后端 curl 实测：/api/tools（9 命令）、/api/options（含 3 个克隆音色）、POST /api/tool/help|voices|video|ask 分发正确、GET /api/video/{id} 200（1.7MB mp4）、/ui 200（21KB）
+- 后端 curl 实测：/api/tools（**15 命令**，含新增 luts/moods/tasks/status/trends/clean）、/api/options（含 3 个克隆音色）、POST /api/tool/help|voices|video|ask 分发正确、GET /api/video/{id} 200（1.7MB mp4）、/ui 200（21KB）
 - JS 语法：node --check 通过（提取 script 段）
 - 编译：py_compile api_server.py scheduler.py 通过
 - **全服务关停联测**（GPU 暂停给师兄用）：POST /api/tool/fast 提交 → scheduler mode=fast 分发 → 爬图照常（Pexels 在线不占 GPU）→ TTS 缺省（静音兜底 + ⚠ 打印）→ **6.0s 成片 completed** → /api/video 流 200（409KB）→ /api/tool/video 返回 video_url。前端三类卡片数据形态齐验：任务卡片（queued/running/failed + error）、video 卡片（completed + <video src=/api/video/{id}>）、dialog 卡片（/ask missing/questions/续聊/COMPLETE chip）

@@ -58,11 +58,11 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - 不做自动补全（宁可多问）；≤3 轮 LOCKED 强制放行
 
 **v7 前端 agent WebUI**（M1-M4 代码完成，2026-09-15；浏览器渲染+成片端到端待 GPU 恢复验证）：
-- **M1 后端端点** ✅：`core/api_server.py` 加 `GET /api/video/{task_id}`（视频流 FileResponse）+ `GET /api/options`（音色/LUT/BGM/特效/运镜枚举）+ `GET /api/tools`（9 命令+参数 schema）+ `POST /api/tool/{name}`（统一分发，shlex 解析 `--key value`/`-n N`/位置参数）+ /ui StaticFiles；`scheduler.py _run_task` 加 **mode 分发**（auto/fast/hot 映射 vidance.py 子命令参数）；TaskSubmit 加 mode/images_source/images_count/effects/top_each/account 字段
+- **M1 后端端点** ✅：`core/api_server.py` 加 `GET /api/video/{task_id}`（视频流 FileResponse）+ `GET /api/options`（音色/LUT/BGM/特效/运镜枚举）+ `GET /api/tools`（**15 命令**+参数 schema）+ `POST /api/tool/{name}`（统一分发，shlex 解析 `--key value`/`-n N`/位置参数）+ /ui StaticFiles；`scheduler.py _run_task` 加 **mode 分发**（auto/fast/hot 映射 vidance.py 子命令参数）；TaskSubmit 加 mode/images_source/images_count/effects/top_each/account 字段
 - **M2 对话+/命令补全** ✅：`ui/index.html`（自包含 21KB，零 npm）三栏布局（左工具/任务边栏+顶部画布+右下发框）；`/` 弹层（↑↓/Tab/Enter 选择，参数区不弹）；自然语言 → v6 dialog
 - **M3 画布** ✅：任务卡片 2s 轮询（进度条+stage+error）+ video 卡片（completed 自动嵌 `<video controls src=/api/video/{id}>`）+ 左栏任务列表（点击回看/轮询）
 - **M4 ask+scout 接洽** ✅：/ask → 问题渲染 → 输入续聊（/api/dialog/{id}/reply）→ COMPLETE 后增强概念 chip 一键 `/fast`；scout 候选分数展示；voices/clip(异步轮询)/help 分发
-- **验证**：后端 curl 实测（tools 9 命令/options/video 流 1.7MB/ask/voices/help/video 分发）；JS node --check 通过；/ui 200（21KB）；GPU 停机期间成片链路未测
+- **验证**：后端 curl 实测（tools **15 命令** 全 dispatch /options/video 流 1.7MB/ask/voices/help/video 分发）；JS node --check 通过；/ui 200（21KB）；GPU 停机期间成片链路未测。新增查询/维护类命令全零 GPU（luts/moods/tasks/status/trends(爬热点不选题)/clean(默认 keep 10)）
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -433,7 +433,7 @@ curl -X POST http://127.0.0.1:8894/api/dialog/dlg_xxx/reply -H 'Content-Type: ap
 # /fast 概念 -n 3 --effects auto   → 提交任务 → 画布轮询 → 成片 video 卡片
 # /hot /auto /ask /clip /scout /voices /video {id} /help 同理
 # 后端对应：
-curl http://127.0.0.1:8894/api/tools                     # 9 命令 + 参数 schema
+curl http://127.0.0.1:8894/api/tools                     # 15 命令 + 参数 schema
 curl http://127.0.0.1:8894/api/options                   # 音色/LUT/BGM/特效枚举
 curl -X POST http://127.0.0.1:8894/api/tool/fast -H 'Content-Type: application/json' -d '{"args":"概念 -n 3 --effects auto"}'
 curl http://127.0.0.1:8894/api/video/{task_id} -o final.mp4   # 成片视频流

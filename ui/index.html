@@ -82,8 +82,8 @@
   .progress-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0; transition: width .5s; }
   .card .meta { font-size: 12px; color: var(--fg-dim); }
   .card video { width: 100%; border-radius: 8px; margin-top: 10px; max-height: 320px; background: #000; }
-  .card .cand { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-size: 13px; }
-  .card .score { color: var(--ok); font-weight: 700; min-width: 24px; }
+  .card .cand, .msg.bot .cand { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-size: 13px; }
+  .card .score, .msg.bot .score { color: var(--ok); font-weight: 700; min-width: 24px; }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; margin-right: 6px; }
   .pill.running { background: #2a2a55; color: var(--accent); }
   .pill.completed { background: #1a3a2e; color: var(--ok); }
@@ -411,6 +411,32 @@ async function dispatchSlash(text) {
     else { addTaskCard(d.task); startPolling(d.task.task_id); }
     return;
   }
+  // luts / moods 枚举
+  if (d.luts) {
+    addBot(`<b>${escapeHtml(d.message)}</b>\n` + d.luts.map(l => `• ${escapeHtml(l)}`).join('\n'));
+    return;
+  }
+  if (d.moods) {
+    addBot(`<b>${escapeHtml(d.message)}</b>\n` + d.moods.map(x => `• ${escapeHtml(x)}`).join('\n'));
+    return;
+  }
+  // tasks 列表
+  if (d.tasks) {
+    const rows = d.tasks.map(t =>
+      `<div class="cand"><span class="st-${t.status}">${t.status}</span> ` +
+      `<span>${escapeHtml((t.concept||'').slice(0,30))}</span> <code>${t.task_id}</code></div>`).join('');
+    addBot(`<b>${escapeHtml(d.message)}</b>${rows}`);
+    return;
+  }
+  // trends 热榜
+  if (d.topics) {
+    const rows = d.topics.map((t,i) =>
+      `<div class="cand"><span class="score">${i+1}</span> ` +
+      `<span>${escapeHtml((t.title||'').slice(0,50))}</span> ` +
+      `<span class="d" style="float:right">${escapeHtml(t.source||'')}</span></div>`).join('');
+    addBot(`<b>${escapeHtml(d.message)}</b>${rows}`);
+    return;
+  }
   if (d.job_id && d.poll) {  // clip 异步
     addBot(`<b>✓ ${escapeHtml(d.message)}</b> 轮询 ${escapeHtml(d.poll)}`);
     pollClip(d.job_id);
@@ -517,6 +543,8 @@ function renderSlash() {
   pop.innerHTML = slashMatches.map((t, i) =>
     `<div class="slash-item ${i === slashIdx ? 'active' : ''}" onmouseover="slashIdx=${i};renderSlash()" onclick="pickSlash(${i})">
       <code>/${t.name}</code><span class="d">${escapeHtml(t.help)}</span></div>`).join('');
+  const activeEl = pop.querySelector('.slash-item.active');
+  if (activeEl && activeEl.scrollIntoView) activeEl.scrollIntoView({ block: 'nearest' });
 }
 function hideSlash() { pop.classList.remove('show'); slashActive = false; slashMatches = []; }
 function pickSlash(i) {
