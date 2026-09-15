@@ -46,6 +46,7 @@ scheduler = None
 
 class TaskSubmit(BaseModel):
     concept: str
+    mode: str = 'auto'  # v7: auto|fast|hot（scheduler 分发 vidance.py 子命令）
     character: Optional[str] = None
     character_mode: str = 'flux'
     voice: Optional[str] = None
@@ -56,6 +57,14 @@ class TaskSubmit(BaseModel):
     no_rife: bool = False
     no_color: bool = False
     no_bgm: bool = False
+    # v7 fast/hot 参数
+    images_source: Optional[str] = None
+    images_count: Optional[int] = None
+    effects: Optional[str] = None
+    motion: Optional[str] = None
+    stt: bool = False
+    top_each: Optional[int] = None
+    account: Optional[str] = None
 
 
 class ScoutRequest(BaseModel):
@@ -334,6 +343,267 @@ def dialog_reply(dialog_id: str, req: DialogReply):
     if 'error' in s:
         raise HTTPException(status_code=404, detail=s['error'])
     return s
+
+
+# ══ v7 前端：只读端点 + / 斜杠命令统一分发 + 静态 UI ══
+
+# ── /api/video/{task_id}：成片视频流 ──
+@app.get('/api/video/{task_id}')
+def video_stream(task_id: str):
+    task = queue.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    output = task.get('output')
+    if not output or not os.path.exists(output):
+        # 兜底：output/{task_id}/final.mp4 或 final_slow.mp4
+        for name in ('final.mp4', 'final_slow.mp4'):
+            cand = os.path.join(load_config().get('output_dir', 'output'), task_id, name)
+            if os.path.exists(cand):
+                output = cand
+                break
+    if not output or not os.path.exists(output):
+        raise HTTPException(status_code=404, detail='Video not found (task may still be running)')
+    return FileResponse(output, media_type='video/mp4', filename=os.path.basename(output))
+
+
+# ── /api/options：枚举（音色/LUT/BGM/特效/运镜），供前端下拉 ──
+@app.get('/api/options')
+def options():
+    voices = []
+    try:
+        from utils.voice_clone import VoiceCloner
+        voices = [v.get('name') if isinstance(v, dict) else str(v)
+                  for v in VoiceCloner().list_voices()]
+    except Exception:
+        pass
+    return {
+        'voices': voices,
+        'character_modes': ['auto', 'flux', '3dgs', 'mesh'],
+        'luts': ['cinematic', 'warm', 'cool', 'vintage', 'vivid', 'soft'],
+        'bgms': ['calm', 'uplifting', 'mysterious', 'dramatic', 'playful', 'epic'],
+        'effects': ['auto', 'off'],
+        'motions': ['pan', 'zoom-in', 'zoom-out'],
+        'images_sources': ['crawl', 'flux'],
+        'accounts': ['热门资讯', '影视解说', '萌宠', '情感'],
+    }
+
+
+# ── /api/tools：/ 斜杠命令清单（前端补全渲染） ──
+TOOLS = [
+    {'name': 'auto', 'help': '概念→LLM编剧→生成→后处理（完整流水线）',
+     'params': [
+         {'key': 'concept', 'type': 'text', 'required': True, 'desc': '视频概念（中文）'},
+         {'key': '--character', 'type': 'text', 'desc': '角色描述'},
+         {'key': '--character-mode', 'type': 'choice', 'choices': ['auto', 'flux', '3dgs', 'mesh'], 'desc': '角色锚模式'},
+         {'key': '--voice', 'type': 'text', 'desc': 'TTS 音色'},
+         {'key': '--duration', 'type': 'number', 'desc': '目标时长（秒）'},
+         {'key': '--lut', 'type': 'choice', 'choices': ['cinematic', 'warm', 'cool', 'vintage', 'vivid', 'soft'], 'desc': '调色风格'},
+         {'key': '--bgm', 'type': 'choice', 'choices': ['calm', 'uplifting', 'mysterious', 'dramatic', 'playful', 'epic'], 'desc': 'BGM mood'},
+         {'key': '--slowmo', 'type': 'number', 'desc': '慢动作倍率'},
+     ]},
+    {'name': 'fast', 'help': '快速营销号链路：爬图+运镜+TTS（分钟级出片）',
+     'params': [
+         {'key': 'concept', 'type': 'text', 'required': True, 'desc': '热点概念/旁白主题（中文）'},
+         {'key': '--images-source', 'type': 'choice', 'choices': ['crawl', 'flux'], 'desc': '图片来源'},
+         {'key': '-n', 'type': 'number', 'desc': '图片/段落数（≤5）'},
+         {'key': '--effects', 'type': 'choice', 'choices': ['auto', 'off'], 'desc': 'v5 特效'},
+         {'key': '--lut', 'type': 'choice', 'choices': ['cinematic', 'warm', 'cool', 'vintage', 'vivid', 'soft'], 'desc': '调色风格'},
+         {'key': '--bgm', 'type': 'choice', 'choices': ['calm', 'uplifting', 'mysterious', 'dramatic', 'playful', 'epic'], 'desc': 'BGM mood'},
+         {'key': '--stt', 'type': 'flag', 'desc': 'STT 字幕对齐'},
+     ]},
+    {'name': 'hot', 'help': '爬实时热点→LLM选题→出片（一步到位）',
+     'params': [
+         {'key': '-n', 'type': 'number', 'desc': '图片/段落数（≤5）'},
+         {'key': '--account', 'type': 'text', 'desc': '账号定位（热门资讯/影视解说/萌宠/情感）'},
+         {'key': '--images-source', 'type': 'choice', 'choices': ['crawl', 'flux'], 'desc': '图片来源'},
+         {'key': '--effects', 'type': 'choice', 'choices': ['auto', 'off'], 'desc': 'v5 特效'},
+     ]},
+    {'name': 'ask', 'help': 'v6 多轮核实：补齐概念缺失维度 → 增强概念',
+     'params': [
+         {'key': 'concept', 'type': 'text', 'required': True, 'desc': '原始概念（中文）'},
+     ]},
+    {'name': 'clip', 'help': 'FunClip：长素材 ASR 转写+语义裁剪',
+     'params': [
+         {'key': 'input', 'type': 'text', 'required': True, 'desc': '音频/视频路径'},
+         {'key': '-i', 'type': 'text', 'required': True, 'desc': '保留什么（自然语言指令）'},
+     ]},
+    {'name': 'scout', 'help': '爬热点→概念候选排序',
+     'params': [
+         {'key': '--account', 'type': 'text', 'desc': '账号定位'},
+         {'key': '-n', 'type': 'number', 'desc': '候选数'},
+     ]},
+    {'name': 'voices', 'help': '列出已注册音色', 'params': []},
+    {'name': 'video', 'help': '播放成片',
+     'params': [
+         {'key': 'task_id', 'type': 'text', 'required': True, 'desc': '任务 ID'},
+     ]},
+    {'name': 'help', 'help': '列出全部 / 命令', 'params': []},
+]
+
+
+@app.get('/api/tools')
+def tools():
+    return {'tools': TOOLS}
+
+
+class ToolRequest(BaseModel):
+    args: str = ''
+
+
+def _parse_tool_args(argstr: str) -> dict:
+    """解析命令参数串 → {positional: [...], flags: {key: value}}
+
+    支持：`"概念" --key value --flag` / `概念 --key value`（首 token 或引号内为位置参数）
+    """
+    import shlex
+    try:
+        tokens = shlex.split(argstr)
+    except ValueError:
+        tokens = argstr.split()
+    out = {'positional': [], 'flags': {}}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.startswith('--'):
+            key = t[2:].replace('-', '_')
+            if i + 1 < len(tokens) and not tokens[i + 1].startswith('--'):
+                out['flags'][key] = tokens[i + 1]
+                i += 2
+            else:
+                out['flags'][key] = True
+                i += 1
+        elif t.startswith('-') and len(t) == 2:  # 短参数如 -n
+            key = t[1:]
+            if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
+                out['flags'][key] = tokens[i + 1]
+                i += 2
+            else:
+                out['flags'][key] = True
+                i += 1
+        else:
+            out['positional'].append(t)
+            i += 1
+    return out
+
+
+def _task_id_from_response(resp: dict) -> Optional[str]:
+    return resp.get('task_id') if isinstance(resp, dict) else None
+
+
+@app.post('/api/tool/{name}')
+def tool_dispatch(name: str, req: ToolRequest):
+    """统一 / 命令分发：解析 args → 调对应后端 → {result, task_id?, message}"""
+    spec = next((t for t in TOOLS if t['name'] == name), None)
+    if not spec:
+        raise HTTPException(status_code=404, detail=f'Unknown tool: {name}')
+    a = _parse_tool_args(req.args or '')
+    pos = a['positional']
+    flags = a['flags']
+
+    # ── help ──
+    if name == 'help':
+        return {'message': '可用命令：' + '、'.join(f'/{t["name"]} {t["help"]}' for t in TOOLS),
+                'tools': TOOLS}
+
+    # ── voices ──
+    if name == 'voices':
+        from utils.voice_clone import VoiceCloner
+        vs = VoiceCloner().list_voices()
+        return {'message': f'共 {len(vs)} 个自定义音色', 'voices': vs}
+
+    # ── video ──
+    if name == 'video':
+        if not pos:
+            raise HTTPException(status_code=400, detail='用法: /video {task_id}')
+        task_id = pos[0]
+        task = queue.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail='Task not found')
+        return {'message': f'任务 {task_id} 状态 {task["status"]}',
+                'task': task, 'video_url': f'/api/video/{task_id}'}
+
+    # ── ask（v6 dialog）──
+    if name == 'ask':
+        if not pos:
+            raise HTTPException(status_code=400, detail='用法: /ask 概念')
+        from utils.dialog import DialogManager
+        dm = DialogManager()
+        s = dm.start(' '.join(pos))
+        return {'message': f'评估 {s["status"]}，缺失 {len(s["missing"])} 项', 'dialog': s}
+
+    # ── scout ──
+    if name == 'scout':
+        from utils.crawler import Crawler
+        from utils.llm import LLMClient
+        crawler = Crawler()
+        llm = LLMClient(load_config())
+        account = flags.get('account', '影视解说')
+        n = int(flags.get('n', 5))
+        topics = crawler.fetch_hot_topics(top_per_source=15)
+        candidates = llm.scout_topics(topics, account_type=account, n_candidates=n)
+        batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        queue.save_scout_batch(batch_id, topics, candidates)
+        return {'message': f'{len(topics)} 条热点 → {len(candidates)} 候选',
+                'batch_id': batch_id, 'candidates': candidates}
+
+    # ── clip（FunClip 异步）──
+    if name == 'clip':
+        if not pos:
+            raise HTTPException(status_code=400, detail='用法: /clip 输入路径 -i "指令"')
+        req2 = ClipRequest(input=pos[0], instructions=flags.get('i', flags.get('instructions', '')))
+        job_id = f'clip_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+        with _clip_jobs_lock:
+            _clip_jobs[job_id] = {'job_id': job_id, 'input': req2.input,
+                                  'instructions': req2.instructions,
+                                  'status': 'running', 'created_at': datetime.now().isoformat()}
+        threading.Thread(target=_run_clip, args=(job_id, req2), daemon=True).start()
+        return {'message': '裁剪任务已提交（异步）', 'job_id': job_id, 'poll': f'/api/clip/{job_id}'}
+
+    # ── 任务型：auto / fast / hot（提交任务队列，前端轮询）──
+    if name in ('auto', 'fast', 'hot'):
+        if not pos:
+            raise HTTPException(status_code=400, detail=f'用法: /{name} 概念')
+        concept = ' '.join(pos)
+        opts = {'mode': name}
+        if name == 'auto':
+            for k in ('character', 'character_mode', 'voice', 'lut', 'bgm'):
+                if flags.get(k):
+                    opts[k] = flags[k]
+            for k in ('duration', 'slowmo'):
+                if flags.get(k):
+                    opts[k] = float(flags[k])
+            if flags.get('stt'):
+                opts['stt'] = True
+        else:  # fast / hot
+            for k in ('images_source', 'effects', 'voice', 'motion', 'lut', 'bgm', 'account'):
+                if flags.get(k):
+                    opts[k] = flags[k]
+            if flags.get('n'):
+                opts['images_count'] = min(int(flags['n']), 5)  # ≤5（用户约定）
+            if flags.get('stt'):
+                opts['stt'] = True
+        task_id = queue.submit(concept, options=opts)
+        return {'message': f'任务已提交: {task_id}', 'task_id': task_id,
+                'progress_url': f'/api/tasks/{task_id}'}
+
+    raise HTTPException(status_code=400, detail=f'Tool {name} not dispatchable')
+
+
+# ── 静态前端 /ui ──
+_UI_DIR = os.path.join(os.path.dirname(__file__), '..', 'ui')
+
+if os.path.isdir(_UI_DIR):
+    from fastapi.staticfiles import StaticFiles
+    app.mount('/ui', StaticFiles(directory=_UI_DIR, html=True), name='ui')
+
+
+@app.get('/ui')
+def ui_index():
+    """/ui 重定向到 index.html（未挂载时兜底）"""
+    index = os.path.join(_UI_DIR, 'index.html')
+    if os.path.exists(index):
+        return FileResponse(index, media_type='text/html')
+    raise HTTPException(status_code=404, detail='ui/index.html not found')
 
 
 if __name__ == '__main__':

@@ -119,19 +119,54 @@ class FastLine:
             # Pexels 图源（首选，精准对题且已 md5 去重）——直接取 n 张，无需逐张慢速多模态校验，
             # 总数严格 ≤ n，速度快。
             print(f'  [crawl] 为概念取参考图（目标 {n} 张，Pexels 图源）...')
-            items = self.crawler.download_images(concept, save_dir, top=n)
-            imgs = [it['path'] for it in items]
+            try:
+                items = self.crawler.download_images(concept, save_dir, top=n)
+                imgs = [it['path'] for it in items]
+            except Exception as e:
+                print(f'  ⚠ [图源缺省] 爬图服务不可用（{e}），转 FLUX/纯色兜底')
+                imgs = []
             print(f'  [crawl] 取到 {len(imgs)} 张')
             if len(imgs) < n:
                 lack = n - len(imgs)
-                print(f'  [topup] 图源不足，用 FLUX 补齐 {lack} 张')
-                imgs += self._gen_flux_images(concept, lack, save_dir, segments=segments)
+                try:
+                    print(f'  [topup] 图源不足，用 FLUX 补齐 {lack} 张')
+                    imgs += self._gen_flux_images(concept, lack, save_dir, segments=segments)
+                except Exception as e:
+                    print(f'  ⚠ [FLUX 缺省] FLUX 不可用（{e}），用纯色图兜底 {lack} 张')
+                    imgs += [self._gen_placeholder_image(save_dir, i, concept)
+                             for i in range(lack)]
         else:  # 'flux'
-            imgs = self._gen_flux_images(concept, n, save_dir, segments=segments)
+            try:
+                imgs = self._gen_flux_images(concept, n, save_dir, segments=segments)
+            except Exception as e:
+                print(f'  ⚠ [FLUX 缺省] FLUX 不可用（{e}），用纯色图兜底 {n} 张')
+                imgs = [self._gen_placeholder_image(save_dir, i, concept)
+                        for i in range(n)]
 
         if not imgs:
             raise RuntimeError('图片获取失败，请 --images 自行提供或检查网络/8192')
         return _pad_list(imgs, n)[:n]
+
+    @staticmethod
+    def _gen_placeholder_image(save_dir, idx, concept=''):
+        """纯色渐变占位图（服务缺省兜底，1280x720 jpg）"""
+        from PIL import Image, ImageDraw
+        colors = [(28, 32, 48), (44, 40, 72), (24, 48, 60), (52, 36, 48)]
+        base = colors[idx % len(colors)]
+        img = Image.new('RGB', (1280, 720), base)
+        d = ImageDraw.Draw(img)
+        # 底部渐变亮带 + 概念水印，避免纯色死板
+        for y in range(720 - 160, 720):
+            t = (y - (720 - 160)) / 160
+            c = tuple(int(base[i] + (255 - base[i]) * t * 0.25) for i in range(3))
+            d.line([(0, y), (1280, y)], fill=c)
+        try:
+            d.text((40, 40), f'({idx + 1}) {concept[:24]}', fill=(200, 200, 220))
+        except Exception:
+            pass
+        path = os.path.join(save_dir, f'placeholder_{idx}.jpg')
+        img.save(path, quality=88)
+        return path
 
     def _gen_flux_images(self, concept, n, save_dir, segments=None,
                          max_retry=2) -> list:
@@ -215,9 +250,27 @@ class FastLine:
             raise RuntimeError(f'Ken Burns 生成失败: {img_path}')
 
     # ══ 4. 每段 TTS 旁白 ══
-    def _tts_segment(self, text, out_path, voice, speed):
-        r = self.tts.synthesize(text, output_path=out_path, voice=voice, speed=speed)
-        return r.get('audio_path', out_path)
+    def _tts_segment(self, text, out_path, voice, speed, fallback_seconds=3.0):
+        """TTS 合成。服务不可用时生成静音音频兜底（流程不崩，打印缺省警告）。"""
+        try:
+            r = self.tts.synthesize(text, output_path=out_path, voice=voice, speed=speed)
+            return r.get('audio_path', out_path)
+        except Exception as e:
+            print(f'  ⚠ [TTS 缺省] TTS 服务不可用（{e}），段音频用静音 {fallback_seconds}s 兜底')
+            print(f'    （启动 TTS: CUDA_VISIBLE_DEVICES=2 TTS_FP16=1 python utils/tts_server.py）')
+            self._gen_silence(out_path, fallback_seconds)
+            return out_path
+
+    @staticmethod
+    def _gen_silence(out_path, seconds):
+        """ffmpeg 生成静音 wav（24kHz mono 16bit，与 TTS 输出格式一致）"""
+        subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i',
+             f'anullsrc=r=24000:cl=mono', '-t', str(seconds),
+             '-c:a', 'pcm_s16le', out_path],
+            capture_output=True, timeout=30,
+            check=True,
+        )
 
     # ══ 5. 主跑 ══
     def run(self, concept, output_path=None, images_dir=None, n=5,

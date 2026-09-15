@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vidance — AI 视频生成 Agent</title>
+<style>
+  :root {
+    --bg: #0f0f1a; --bg2: #1a1a2e; --bg3: #232342;
+    --fg: #e8e8f0; --fg-dim: #8a8a9e;
+    --accent: #6c7bff; --accent2: #8b5cf6;
+    --ok: #34d399; --warn: #fbbf24; --err: #ef4444;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    height: 100vh; overflow: hidden;
+  }
+  #app { display: grid; grid-template-rows: 52px 1fr; height: 100vh; }
+
+  /* ── 顶部栏 ── */
+  #topbar {
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    background: var(--bg2); border-bottom: 1px solid #2a2a45;
+  }
+  #topbar .brand { font-weight: 700; font-size: 16px; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  #topbar .title { color: var(--fg-dim); font-size: 13px; flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #btn-new {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  #btn-new:hover { opacity: .85; }
+  #btn-menu { display: none; background: none; border: none; color: var(--fg); font-size: 20px; cursor: pointer; }
+
+  /* ── 主体三栏 ── */
+  #main { display: grid; grid-template-columns: 240px 1fr; overflow: hidden; }
+
+  /* 左侧边栏 */
+  #sidebar {
+    background: var(--bg2); border-right: 1px solid #2a2a45;
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  #sidebar section { padding: 12px; border-bottom: 1px solid #2a2a45; }
+  #sidebar h3 { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+  .tool-btn {
+    display: block; width: 100%; text-align: left; margin-bottom: 4px;
+    background: var(--bg3); color: var(--fg); border: none; border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; cursor: pointer; transition: background .15s;
+  }
+  .tool-btn:hover { background: #2e2e55; }
+  .tool-btn code { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .task-item {
+    padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; font-size: 12px;
+  }
+  .task-item:hover { background: var(--bg3); }
+  .task-item .t-status { float: right; font-size: 11px; }
+  .st-queued { color: var(--warn); } .st-running { color: var(--accent); }
+  .st-completed { color: var(--ok); } .st-failed { color: var(--err); }
+
+  /* 画布区（顶部大片留白 + 消息流） */
+  #canvas { display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  #messages { flex: 1; overflow-y: auto; padding: 32px 24px 12px; }
+  .empty-hint { text-align: center; color: var(--fg-dim); margin-top: 18vh; }
+  .empty-hint h1 { font-size: 28px; margin-bottom: 12px; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .empty-hint p { font-size: 14px; margin-bottom: 4px; }
+  .empty-hint code { background: var(--bg3); padding: 2px 8px; border-radius: 6px; color: var(--accent); }
+
+  .msg { max-width: 78%; margin-bottom: 16px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { margin-left: auto; background: var(--accent); color: #fff; padding: 10px 14px; border-radius: 16px 16px 4px 16px; }
+  .msg.bot { background: var(--bg2); padding: 12px 14px; border-radius: 16px 16px 16px 4px; border: 1px solid #2a2a45; }
+  .msg.bot b { color: var(--accent); }
+
+  .card {
+    background: var(--bg2); border: 1px solid #2a2a45; border-radius: var(--radius);
+    padding: 14px; margin: 0 auto 16px; max-width: 640px; width: 90%;
+  }
+  .card h4 { font-size: 13px; color: var(--fg-dim); margin-bottom: 8px; }
+  .card .concept { font-size: 14px; margin-bottom: 10px; }
+  .progress-bar { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+  .progress-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0; transition: width .5s; }
+  .card .meta { font-size: 12px; color: var(--fg-dim); }
+  .card video { width: 100%; border-radius: 8px; margin-top: 10px; max-height: 320px; background: #000; }
+  .card .cand { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-size: 13px; }
+  .card .score { color: var(--ok); font-weight: 700; min-width: 24px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; margin-right: 6px; }
+  .pill.running { background: #2a2a55; color: var(--accent); }
+  .pill.completed { background: #1a3a2e; color: var(--ok); }
+  .pill.failed { background: #3a1a1a; color: var(--err); }
+  .pill.queued { background: #3a301a; color: var(--warn); }
+  .chip-btn {
+    display: inline-block; margin: 6px 6px 0 0; padding: 6px 12px; font-size: 12px;
+    background: var(--bg3); color: var(--accent); border: 1px solid #3a3a60;
+    border-radius: 16px; cursor: pointer;
+  }
+  .chip-btn:hover { background: #2e2e55; }
+
+  /* 右下发框 */
+  #composer { padding: 12px 24px 20px; background: var(--bg); }
+  #composer-inner { max-width: 720px; margin: 0 auto; position: relative; }
+  #input-row {
+    display: flex; gap: 8px; background: var(--bg2); border: 1px solid #32325a;
+    border-radius: 14px; padding: 10px 12px; align-items: flex-end;
+  }
+  #input-row:focus-within { border-color: var(--accent); }
+  #msg-input {
+    flex: 1; background: none; border: none; outline: none; color: var(--fg);
+    font-size: 14px; resize: none; max-height: 120px; line-height: 1.5; font-family: inherit;
+  }
+  #btn-send {
+    background: var(--accent); border: none; color: #fff; border-radius: 10px;
+    width: 38px; height: 34px; font-size: 15px; cursor: pointer; flex-shrink: 0;
+  }
+  #btn-send:disabled { opacity: .4; cursor: default; }
+  #composer .hint { text-align: center; font-size: 11px; color: var(--fg-dim); margin-top: 6px; }
+
+  /* / 命令补全弹层 */
+  #slash-pop {
+    position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 8px;
+    background: var(--bg2); border: 1px solid #32325a; border-radius: 12px;
+    max-height: 300px; overflow-y: auto; display: none; box-shadow: 0 -8px 24px rgba(0,0,0,.5);
+  }
+  #slash-pop.show { display: block; }
+  .slash-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #232342; }
+  .slash-item:hover, .slash-item.active { background: var(--bg3); }
+  .slash-item code { color: var(--accent); font-weight: 700; margin-right: 8px; }
+  .slash-item .d { font-size: 12px; color: var(--fg-dim); }
+
+  /* 窄屏响应式 */
+  @media (max-width: 768px) {
+    #main { grid-template-columns: 1fr; }
+    #sidebar { position: fixed; left: -260px; top: 52px; bottom: 0; width: 240px; z-index: 50; transition: left .25s; }
+    #sidebar.open { left: 0; }
+    #btn-menu { display: block; }
+    .msg, .card { max-width: 95%; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <button id="btn-menu" onclick="toggleSidebar()">☰</button>
+    <span class="brand">Vidance</span>
+    <span class="title" id="session-title">新会话</span>
+    <button id="btn-new" onclick="newSession()">＋ 新建</button>
+  </div>
+  <div id="main">
+    <div id="sidebar">
+      <section>
+        <h3>工具（/ 命令）</h3>
+        <div id="tool-list"></div>
+      </section>
+      <section>
+        <h3>任务</h3>
+        <div id="task-list"><div style="color:var(--fg-dim);font-size:12px;">加载中…</div></div>
+      </section>
+    </div>
+    <div id="canvas">
+      <div id="messages">
+        <div class="empty-hint" id="empty-hint">
+          <h1>Vidance</h1>
+          <p>一句话生成有声短片。直接输入概念，或用 <code>/fast</code> <code>/hot</code> 等命令</p>
+          <p>输入 <code>/</code> 查看全部命令</p>
+        </div>
+      </div>
+      <div id="composer">
+        <div id="composer-inner">
+          <div id="slash-pop"></div>
+          <div id="input-row">
+            <textarea id="msg-input" rows="1" placeholder="输入概念或 / 命令…（回车发送）"></textarea>
+            <button id="btn-send" onclick="send()">↑</button>
+          </div>
+          <div class="hint">/fast 秒级出片 · /hot 热点一步到位 · /ask 补全概念 · /auto 完整流水线</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const messages = $('#messages'), input = $('#msg-input'), pop = $('#slash-pop');
+
+let TOOLS = [];               // /api/tools
+let TOOLS_LOADED = false;
+let activeDialog = null;      // v6 dialog {dialog_id, status, ...}（自然语言对话中）
+let pollers = {};             // task_id → interval
+const pollInterval = 2000;
+
+/* ── 初始化 ── */
+async function init() {
+  try {
+    const r = await fetch('/api/tools');
+    const d = await r.json();
+    TOOLS = d.tools || [];
+  } catch (e) { TOOLS = []; }
+  TOOLS_LOADED = true;
+  renderToolList();
+  refreshTasks();
+  setInterval(refreshTasks, 10000);
+  input.focus();
+}
+
+/* ── 左栏工具按钮 ── */
+function renderToolList() {
+  const el = $('#tool-list');
+  el.innerHTML = TOOLS.map(t =>
+    `<button class="tool-btn" onclick="insertCmd('${t.name}')"><code>/${t.name}</code>${t.help}</button>`
+  ).join('');
+}
+
+function insertCmd(name) {
+  const t = TOOLS.find(x => x.name === name);
+  let line = '/' + name;
+  if (t && t.params.length) {
+    const req = t.params.filter(p => p.required).map(p => p.desc || p.key).join(' ');
+    line += ' ' + (req || '');
+  }
+  input.value = line;
+  input.focus();
+  $('#sidebar').classList.remove('open');
+}
+
+/* ── 左栏任务列表 ── */
+async function refreshTasks() {
+  try {
+    const r = await fetch('/api/tasks?limit=30');
+    const d = await r.json();
+    const el = $('#task-list');
+    if (!d.tasks || !d.tasks.length) {
+      el.innerHTML = '<div style="color:var(--fg-dim);font-size:12px;">暂无任务</div>';
+      return;
+    }
+    el.innerHTML = d.tasks.map(t =>
+      `<div class="task-item" onclick="showTask('${t.task_id}')">${escapeHtml((t.concept||'').slice(0,18))}
+        <span class="t-status st-${t.status}">${t.status}</span></div>`
+    ).join('');
+  } catch (e) {}
+}
+
+function showTask(taskId) {
+  fetch(`/api/tasks/${taskId}`).then(r => r.json()).then(t => {
+    if (t.status === 'completed') {
+      addVideoCard(t);
+    } else {
+      addTaskCard(t);
+      startPolling(t.task_id);
+    }
+    $('#sidebar').classList.remove('open');
+    scrollBottom();
+  });
+}
+
+/* ── 消息渲染 ── */
+function addUser(text) {
+  hideEmpty();
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.textContent = text;
+  messages.appendChild(div);
+  scrollBottom();
+}
+function addBot(html) {
+  hideEmpty();
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = html;
+  messages.appendChild(div);
+  scrollBottom();
+  return div;
+}
+function hideEmpty() { const e = $('#empty-hint'); if (e) e.remove(); }
+function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
+function escapeHtml(s) {
+  return (s||'').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"');
+}
+
+/* ── 卡片 ── */
+function addTaskCard(t) {
+  hideEmpty();
+  if (document.getElementById('card-' + t.task_id)) return updateTaskCard(t);
+  const div = document.createElement('div');
+  div.className = 'card'; div.id = 'card-' + t.task_id;
+  div.innerHTML = `
+    <h4><span class="pill ${t.status}" id="pill-${t.task_id}">${t.status}</span> 生成中</h4>
+    <div class="concept">${escapeHtml(t.concept)}</div>
+    <div class="progress-bar"><div id="bar-${t.task_id}"></div></div>
+    <div class="meta" id="meta-${t.task_id}">阶段: ${t.stage || 'queued'}</div>`;
+  messages.appendChild(div);
+  scrollBottom();
+}
+
+function updateTaskCard(t) {
+  const pill = document.getElementById('pill-' + t.task_id);
+  const bar = document.getElementById('bar-' + t.task_id);
+  const meta = document.getElementById('meta-' + t.task_id);
+  if (pill) { pill.textContent = t.status; pill.className = 'pill ' + t.status; }
+  if (bar) bar.style.width = Math.round((t.progress || 0) * 100) + '%';
+  if (meta) meta.textContent = '阶段: ' + (t.stage || t.status) + (t.error ? ' | 错误: ' + t.error : '');
+  if ((t.status === 'completed' || t.status === 'failed') && pollers[t.task_id]) {
+    clearInterval(pollers[t.task_id]); delete pollers[t.task_id];
+    if (t.status === 'completed') addVideoCard(t);
+    else addBot(`<b>✗ 任务失败</b> ${escapeHtml(t.task_id)}：${escapeHtml(t.error||'')}`);
+  }
+}
+
+function addVideoCard(t) {
+  hideEmpty();
+  if (document.getElementById('card-' + t.task_id)) {
+    const card = document.getElementById('card-' + t.task_id);
+    const pill = document.getElementById('pill-' + t.task_id);
+    if (pill) { pill.textContent = 'completed'; pill.className = 'pill completed'; }
+    if (!card.querySelector('video')) {
+      card.querySelector('.progress-bar').style.display = 'none';
+      card.insertAdjacentHTML('beforeend',
+        `<video controls preload="metadata" src="/api/video/${t.task_id}"></video>`);
+    }
+    return;
+  }
+  const div = document.createElement('div');
+  div.className = 'card'; div.id = 'card-' + t.task_id;
+  div.innerHTML = `
+    <h4><span class="pill completed">completed</span> 成片</h4>
+    <div class="concept">${escapeHtml(t.concept)}</div>
+    <video controls preload="metadata" src="/api/video/${t.task_id}"></video>`;
+  messages.appendChild(div);
+  scrollBottom();
+}
+
+function startPolling(taskId) {
+  if (pollers[taskId]) return;
+  pollers[taskId] = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/tasks/${taskId}`);
+      if (r.status === 404) { clearInterval(pollers[taskId]); delete pollers[taskId]; return; }
+      const t = await r.json();
+      if (document.getElementById('card-' + taskId)) updateTaskCard(t);
+      else addTaskCard(t);
+    } catch (e) {}
+  }, pollInterval);
+}
+
+/* ── 发送 ── */
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = ''; input.style.height = 'auto'; hideSlash();
+  addUser(text);
+  setSending(true);
+
+  try {
+    if (text.startsWith('/')) {
+      await dispatchSlash(text);
+    } else {
+      await sendNatural(text);
+    }
+  } catch (e) {
+    addBot('<b>✗ 请求失败</b> ' + escapeHtml(String(e)));
+  }
+  setSending(false);
+  refreshTasks();
+}
+
+function setSending(b) { $('#btn-send').disabled = b; }
+
+/* / 命令分发 */
+async function dispatchSlash(text) {
+  const m = text.match(/^\/(\w+)\s*([\s\S]*)$/);
+  if (!m) { addBot('命令格式：/名称 参数，输入 / 查看全部'); return; }
+  const [, name, rest] = m;
+  const r = await fetch(`/api/tool/${name}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args: rest }),
+  });
+  const d = await r.json();
+  if (!r.ok) { addBot('<b>✗ ' + escapeHtml(d.detail || r.status) + '</b>'); return; }
+
+  // 任务型：auto/fast/hot
+  if (d.task_id) {
+    addBot(`<b>✓ 已提交</b> ${escapeHtml(d.message)}`);
+    const t = await (await fetch(`/api/tasks/${d.task_id}`)).json();
+    addTaskCard(t);
+    startPolling(d.task_id);
+    return;
+  }
+  // v6 dialog
+  if (d.dialog) {
+    activeDialog = d.dialog;
+    renderDialog(d.dialog, rest);
+    return;
+  }
+  // scout
+  if (d.candidates) {
+    const rows = d.candidates.map(c =>
+      `<div class="cand"><span class="score">${c.predicted_score ?? '-'}</span>
+        <span>${escapeHtml(c.concept)}</span></div>`).join('');
+    addBot(`<b>${escapeHtml(d.message)}</b>${rows}`);
+    return;
+  }
+  // voices
+  if (d.voices) {
+    addBot(`<b>${escapeHtml(d.message)}</b>\n` + d.voices.map(v =>
+      `• ${escapeHtml(v.name || v)} ${v.desc ? '— ' + escapeHtml(v.desc) : ''}`).join('\n'));
+    return;
+  }
+  // video tool
+  if (d.task) {
+    if (d.task.status === 'completed') addVideoCard(d.task);
+    else { addTaskCard(d.task); startPolling(d.task.task_id); }
+    return;
+  }
+  if (d.job_id && d.poll) {  // clip 异步
+    addBot(`<b>✓ ${escapeHtml(d.message)}</b> 轮询 ${escapeHtml(d.poll)}`);
+    pollClip(d.job_id);
+    return;
+  }
+  if (d.message) addBot('<b>' + escapeHtml(d.message) + '</b>');
+}
+
+function pollClip(jobId) {
+  const iv = setInterval(async () => {
+    const d = await (await fetch(`/api/clip/${jobId}`)).json();
+    if (d.status === 'completed') {
+      clearInterval(iv);
+      addBot(`<b>✓ 裁剪完成</b>\n输出: ${escapeHtml(d.output)}\n保留 ${d.keep ? d.keep.length : 0} 段 / 共 ${d.segments ? d.segments.length : 0} 段`);
+    } else if (d.status === 'failed') {
+      clearInterval(iv);
+      addBot('<b>✗ 裁剪失败</b> ' + escapeHtml(d.error || ''));
+    }
+  }, 3000);
+}
+
+/* 自然语言 → v6 dialog（续聊或新开） */
+async function sendNatural(text) {
+  if (activeDialog && ['OPEN', 'COLLECTING'].includes(activeDialog.status)) {
+    const r = await fetch(`/api/dialog/${activeDialog.dialog_id}/reply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const d = await r.json();
+    if (!r.ok) { addBot('<b>✗ ' + escapeHtml(d.detail || r.status) + '</b>'); return; }
+    activeDialog = d;
+    renderDialog(d, text);
+    return;
+  }
+  // 新开 dialog
+  const r = await fetch('/api/dialog/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ concept: text }),
+  });
+  const d = await r.json();
+  activeDialog = d;
+  renderDialog(d, text);
+}
+
+function renderDialog(d, userText) {
+  const st = d.status;
+  let html = '';
+  if (st === 'COMPLETE' || st === 'LOCKED') {
+    html = `<b>✓ 概念已${st === 'COMPLETE' ? '补全' : '达 3 轮上限，强制放行'}</b>\n增强概念：\n${escapeHtml(d.concept)}`
+      + `<br><button class="chip-btn" onclick="useConcept()">→ /fast 出片</button>`
+      + `<button class="chip-btn" onclick="useConcept('auto')">→ /auto 完整生成</button>`;
+    activeDialog = null;
+  } else {
+    const qs = (d.questions || []).map(q => '• ' + escapeHtml(q)).join('\n');
+    html = `<b>还差 ${d.missing.length} 项</b>（${escapeHtml(d.missing.join('、'))}）\n${qs}\n<i>直接回答即可，或说"随便"跳过</i>`;
+  }
+  addBot(html);
+}
+
+function useConcept(mode) {
+  // 取最近一次增强概念
+  const bots = messages.querySelectorAll('.msg.bot');
+  const last = bots[bots.length - 1];
+  const concept = (last.textContent.match(/增强概念：\n([\s\S]*?)(?:→|$)/) || [])[1] || '';
+  input.value = `/${mode} ${concept.trim()}`;
+  input.focus();
+}
+
+/* ── / 斜杠补全 ── */
+let slashActive = false, slashIdx = 0, slashMatches = [];
+
+input.addEventListener('input', () => {
+  autoHeight();
+  const v = input.value;
+  if (v.startsWith('/')) showSlash(v);
+  else hideSlash();
+});
+input.addEventListener('keydown', (e) => {
+  if (slashActive && slashMatches.length) {
+    if (e.key === 'ArrowDown') { slashIdx = (slashIdx + 1) % slashMatches.length; renderSlash(); e.preventDefault(); return; }
+    if (e.key === 'ArrowUp') { slashIdx = (slashIdx - 1 + slashMatches.length) % slashMatches.length; renderSlash(); e.preventDefault(); return; }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { pickSlash(slashIdx); e.preventDefault(); return; }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+function autoHeight() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+}
+
+function showSlash(v) {
+  if (!TOOLS_LOADED) return;
+  const prefix = v.slice(1).split(/\s/)[0].toLowerCase();
+  const hasSpace = /\s/.test(v.slice(1));
+  if (hasSpace) { hideSlash(); return; }  // 已在参数区，不补全命令名
+  slashMatches = TOOLS.filter(t => t.name.startsWith(prefix));
+  slashIdx = 0;
+  renderSlash();
+}
+function renderSlash() {
+  if (!slashMatches.length) { hideSlash(); return; }
+  pop.classList.add('show'); slashActive = true;
+  pop.innerHTML = slashMatches.map((t, i) =>
+    `<div class="slash-item ${i === slashIdx ? 'active' : ''}" onmouseover="slashIdx=${i};renderSlash()" onclick="pickSlash(${i})">
+      <code>/${t.name}</code><span class="d">${escapeHtml(t.help)}</span></div>`).join('');
+}
+function hideSlash() { pop.classList.remove('show'); slashActive = false; slashMatches = []; }
+function pickSlash(i) {
+  const t = slashMatches[i];
+  if (!t) return;
+  const rest = input.value.slice(1 + t.name.length);
+  input.value = '/' + t.name + (rest.startsWith(' ') ? rest : ' ' + rest);
+  hideSlash(); input.focus();
+}
+
+/* ── 其他 ── */
+function toggleSidebar() { $('#sidebar').classList.toggle('open'); }
+function newSession() {
+  activeDialog = null;
+  messages.innerHTML = `<div class="empty-hint" id="empty-hint">
+    <h1>Vidance</h1>
+    <p>一句话生成有声短片。直接输入概念，或用 <code>/fast</code> <code>/hot</code> 等命令</p>
+    <p>输入 <code>/</code> 查看全部命令</p></div>`;
+  $('#session-title').textContent = '新会话';
+  input.focus();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -8,9 +8,9 @@ Vidance 是一个基于 opencode agent 编排的本地视频生成系统。核�
 
 **统一入口**：`python core/vidance.py {auto|custom|quick}` — auto 模式走 LLM 编剧+Wan/FLUX 生成，custom 模式走参考图+预写脚本+H3 ref2va 生成，quick 模式纯 T2V 无后处理。后处理（RIFE/LUT/BGM/STT）由 `core/postprocess.py` 共享模块提供。
 
-**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6 prompt 多轮核实完成（M1-M4）+ v7/v8/v9 文档已就绪**（2026-09-14）。
+**当前状态：v2 长视频完成 + v2.1 backlog 接线完成 + v3 完成（M0-M7，M8 跳过）+ v4 M1-M6 完成 + v5 剪辑特效完成（M1-M4）+ v6 prompt 多轮核实完成（M1-M4）+ v7 前端 M1-M4 代码完成（端到端待 GPU）+ v8/v9 文档已就绪**（2026-09-15）。
 
-**版本路线**：v4 营销号流水线（fast/hot 爬图出片）→ v5 剪辑特效 → v6 prompt 多轮核实（ask 交互 + dialog API）→ v7 前端 agent WebUI（仿豆包，左栏+画布+发框+`/`命令调 tool）→ v8 一镜到底 → v9 机器人网关（企微/飞书/钉钉…）。
+**版本路线**：v4 营销号流水线（fast/hot 爬图出片）→ v5 剪辑特效 → v6 prompt 多轮核实（ask 交互 + dialog API）→ v7 前端 agent WebUI（仿豆包，左栏+画布+发框+`/`命令调 tool，访问 :8894/ui）→ v8 一镜到底 → v9 机器人网关（企微/飞书/钉钉…）。
 
 v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 RenderSplat 按角度渲染参考帧 → Wan I2V 生成。
 
@@ -40,7 +40,7 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M3 声音克隆生产化** ✅：`utils/voice_clone.py`（B站搜索 API 随机 buvid3 过反爬 → yt-dlp 下载按 bvid 隔离 → faster-whisper VAD 切段（跳过纯 ♪ 器乐、长块取 8s 窗口、均分质量门 -32dB）→ 24kHz mono 16bit ffmpeg 转换 → STT 转写 prompt_text → 入库 voices/{name}/ 自动注册 cosy-{name} → 测试合成存 voice_samples/）。TTS server 加 `POST /voices/reload` 热加载（免重启注册新音色）。API server 加 `POST /api/clone_voice` 异步克隆端点 + `GET /api/voices`。端到端验证：3 音色克隆全通（xinwen1 新闻播音 / jieshuo1 影视解说 / jilupian1 纪录片，单音色 21-30s），STT 转写回验内容一致，注册音色可按名直接调用
 - **M4 FunClip 智能裁剪** ✅：`utils/funclip.py`（FunASR `speech_paraformer-large-vad-punc` 转写 + 字级时间戳 + 字级聚合成句 + ffmpeg 时段裁剪拼接 + LLM 语义 keep/drop）。三子命令 CLI（transcribe/clip/smart）。**GPU 修复**：满卡（GPU0 被 H3 占满）连 CUDA context 都建不出来（`cudaMemGetInfo` 直接 OOM），`device='auto'` 逐卡探测跳过建不了 context 的卡并选空闲显存最多的卡。端到端验证：4 句水母剧本拼 12.6s 长音频，指令"只要讲光的句子" → LLM 保留 2 句（含语义含"点亮之光"的一句）drop 2 句 → 输出 3.88s，转写回验内容一致；CLI OOM 修复后 14 字全对
 - **M5 素材爬取** ✅：`utils/asset_crawler.py`（必应图片 async 接口搜图下载 + magic bytes 校验 + md5 去重 + LLM concept→关键词 + incompetech BGM 按 feel 搜曲下载 loudnorm→bgm/{mood}.wav）+ 四子命令 CLI（keywords/images/refs/bgm）。**修正**：pieces.json 的时长字段是 `length`（HH:MM:SS 格式）非 duration；filename 自带 `.mp3` 后缀不可重复拼（拼重会 404）；百度图片 acjson 接口需真 cookie 已弃用，必应 `cn.bing.com/images/async` 直连可达。端到端验证：concept"雪山上的日出小狐狸"→LLM 3 关键词→6 张参考图（19-129KB）；`bgm epic --list` 5 首候选（58-62s）→ 爬取 epic.wav（61.4s 10.8MB loudnorm）；pieces.json 固化到 bgm/pieces.json
-- **M6 快速营销号链路** ✅：`utils/fastline.py`（`FastLine`）+ `vidance.py fast/hot` 子命令——**跳过视频模型**：LLM 规划 N 段旁白+每段运镜（pan/zoom-in/zoom-out）→ 图片（`--images-source crawl` 必应爬图+**多模态相关性校验**自动删不相关图、不足 FLUX 补足；或 `flux` 逐段文生图；或 `--images` 自供）→ ffmpeg zoompan(Ken Burns) → 逐段 TTS → crossfade 拼接 → LUT/BGM/STT 复用 PostProcessor。**热搜来源**：`--source-topic`+`--trend-date` 写进 meta + 片头顶部 drawtext 角标（独立于字幕，不造成错位）。`--slowmo N` 另出 `final_slow.mp4`（RIFE，视频-only），原片 `final.mp4` 恒保留。**`hot` 子命令**：爬实时热点→LLM scout 自动选题→fast 一步到位。**FLUX 生图质量门**：`optimize_fastline_prompt()` 中文旁白→英文 FLUX prompt（修"塞中文生成无关图"），生成后 `assess_image_relevance` 审核贴合旁白、不过重生成≤2（实测背包青蛙 score=10 / 程序员删89TB 3图 9/7/9）。端到端验证：scout 从 40 条真实热点选"旅行青蛙停运"9 分，crawl 校验滤掉 3 张不相关图（医院/充电器/回收标志均 score=1.0）FLUX 补足；热搜角标+字幕 0s 对齐。**修正**：①`--bgm` choices 加 `epic`；②`_image_to_base64` 支持 RGBA/P/LA/PA 转 RGB（修 `cannot write mode P as JPEG`）；③RIFE slowmo 不带音轨（helper 仅重编码画面）
+- **M6 快速营销号链路** ✅：`utils/fastline.py`（`FastLine`）+ `vidance.py fast/hot` 子命令——**跳过视频模型**：LLM 规划 N 段旁白+每段运镜（pan/zoom-in/zoom-out）→ 图片（`--images-source crawl` 必应爬图+**多模态相关性校验**自动删不相关图、不足 FLUX 补足；或 `flux` 逐段文生图；或 `--images` 自供）→ ffmpeg zoompan(Ken Burns) → 逐段 TTS → crossfade 拼接 → LUT/BGM/STT 复用 PostProcessor。**热搜来源**：`--source-topic`+`--trend-date` 写进 meta + 片头顶部 drawtext 角标（独立于字幕，不造成错位）。`--slowmo N` 另出 `final_slow.mp4`（RIFE，视频-only），原片 `final.mp4` 恒保留。**`hot` 子命令**：爬实时热点→LLM scout 自动选题→fast 一步到位。**FLUX 生图质量门**：`optimize_fastline_prompt()` 中文旁白→英文 FLUX prompt（修"塞中文生成无关图"），生成后 `assess_image_relevance` 审核贴合旁白、不过重生成≤2（实测背包青蛙 score=10 / 程序员删89TB 3图 9/7/9）。端到端验证：scout 从 40 条真实热点选"旅行青蛙停运"9 分，crawl 校验滤掉 3 张不相关图（医院/充电器/回收标志均 score=1.0）FLUX 补足；热搜角标+字幕 0s 对齐。**修正**：①`--bgm` choices 加 `epic`；②`_image_to_base64` 支持 RGBA/P/LA/PA 转 RGB（修 `cannot write mode P as JPEG`）；③RIFE slowmo 不带音轨（helper 仅重编码画面）；④**服务缺省兜底（2026-09-15）**：TTS 9880 不可用 → 静音音频兜底 + 打印 `⚠ [TTS 缺省]`（含启动提示）；爬图挂 → 转 FLUX，FLUX 挂 → 纯色渐变占位图（`_gen_placeholder_image`，带概念水印）+ `⚠ [图源/FLUX 缺省]`；plan_narration/select_lut/select_bgm 原有兜底不变——**GPU 服务全关时 fast 任务降级跑完出片不崩**（实测：Pexels 照常 + 静音 + 占位图 → 6.0s completed）
 
 **v5 剪辑特效**（M1-M4 完成，2026-09-14）：
 - **M1 特效库** ✅：`utils/effects.py`（8 种镜头内特效：flash/punch_in/glitch/grain_vignette/speed_ramp/freeze_zoom/wipe/zoom，纯 ffmpeg yuv420p）+ 单片段 CLI
@@ -56,6 +56,13 @@ v1 角色锚流程：FLUX 生角色图 → TripoSplat 重建 3DGS → 每镜 Ren
 - **M4 API 三端点** ✅：`core/api_server.py` 加 `POST /api/dialog/start`（返回 missing/questions）+ `GET /api/dialog/{dialog_id}` + `POST /api/dialog/{dialog_id}/reply`（每轮返回增强 concept），供 v7 前端调用；start/reply curl 实测通过
 - **修复（2026-09-15）**：①cmd_ask idx 跨轮累加导致只问一条就退出 → 重构为每轮批量问完再 reply；②选填维度被当必填判 → missing=[] 卡 COLLECTING → 只以必填维度判 COMPLETE；③评估口径"已隐含算不缺"→"明确描述才算"（temperature 0.3→0.1）；④停止条件过松（必填 3 维齐即 COMPLETE，2 问就停 prompt 长不起来）→ 改为**全 6 维齐才 COMPLETE**，style/duration/shot 也追问，概念经 2-3 轮逐步变长
 - 不做自动补全（宁可多问）；≤3 轮 LOCKED 强制放行
+
+**v7 前端 agent WebUI**（M1-M4 代码完成，2026-09-15；浏览器渲染+成片端到端待 GPU 恢复验证）：
+- **M1 后端端点** ✅：`core/api_server.py` 加 `GET /api/video/{task_id}`（视频流 FileResponse）+ `GET /api/options`（音色/LUT/BGM/特效/运镜枚举）+ `GET /api/tools`（9 命令+参数 schema）+ `POST /api/tool/{name}`（统一分发，shlex 解析 `--key value`/`-n N`/位置参数）+ /ui StaticFiles；`scheduler.py _run_task` 加 **mode 分发**（auto/fast/hot 映射 vidance.py 子命令参数）；TaskSubmit 加 mode/images_source/images_count/effects/top_each/account 字段
+- **M2 对话+/命令补全** ✅：`ui/index.html`（自包含 21KB，零 npm）三栏布局（左工具/任务边栏+顶部画布+右下发框）；`/` 弹层（↑↓/Tab/Enter 选择，参数区不弹）；自然语言 → v6 dialog
+- **M3 画布** ✅：任务卡片 2s 轮询（进度条+stage+error）+ video 卡片（completed 自动嵌 `<video controls src=/api/video/{id}>`）+ 左栏任务列表（点击回看/轮询）
+- **M4 ask+scout 接洽** ✅：/ask → 问题渲染 → 输入续聊（/api/dialog/{id}/reply）→ COMPLETE 后增强概念 chip 一键 `/fast`；scout 候选分数展示；voices/clip(异步轮询)/help 分发
+- **验证**：后端 curl 实测（tools 9 命令/options/video 流 1.7MB/ask/voices/help/video 分发）；JS node --check 通过；/ui 200（21KB）；GPU 停机期间成片链路未测
 
 **v1.1 改进**：
 - **I2V 修复**：`WanImageToVideo` → `Wan22ImageToVideoLatent`（Wan 2.2 原生 48ch latent + noise_mask inpainting），首帧与参考图相关性 0.99+
@@ -112,13 +119,14 @@ vidance/
 │       ├── rife_transition.json  # v2 RIFE 插帧 workflow（7 节点）
 │       ├── hunyuan3d_single.json  # v3 Hunyuan3Dv2 单图→mesh workflow（M1 验证）
 │       └── hunyuan3d_multiview.json  # v3 Hunyuan3Dv2 多视角→mesh workflow（M2 验证）
+├── ui/                        # v7 前端（index.html 自包含，零 npm，:8894/ui 访问）
 ├── voices/                    # 自定义 CosyVoice 克隆音色素材目录
 ├── bgm/                       # v2 自定义 BGM 素材目录（放 {mood}.wav 自动使用）
 ├── .opencode/
 │   ├── agents/{director,reviewer,asset,scout}.md
 │   └── skills/{scriptwriting,review,topic_scouting}/SKILL.md
 ├── docs/                      # 设计文档（roadmap + v0-v9 design + deployed-models）
-│   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4/v6.md 分版本小工具）
+│   └── usage*.md              # 使用指南（usage.md 主入口 + usage-v1/v2/v3/v4/v6/v7.md 分版本小工具）
 ├── voice_samples/ → /mnt/dataset/...  # 音色试听样本（软链）
 └── output/ → /mnt/dataset/... # 成片 + 元数据（软链到机械盘）
 ```
@@ -298,7 +306,8 @@ curl -X POST http://127.0.0.1:8894/api/clone_voice \
 | FLUX + TripoSplat (ComfyUI) | 8192 | — | comfyui |
 | SDXL (ComfyUI) | 8191 | — | comfyui |
 | TTS 双引擎 (edge-tts + CosyVoice) | 9880 | GPU2 | cosyvoice |
-| Vidance API (任务队列 + 仪表盘) | 8894 | — | comfyui |
+| Vidance API (任务队列 + 仪表盘 + v6/v7) | 8894 | — | comfyui |
+| Vidance WebUI (v7 前端) | 8894/ui | — | comfyui（浏览器访问） |
 
 > H3 (8188) 独占 GPU0，用于 custom 模式参考图条件视频生成。模型按需加载，首次 workflow 触发后占 ~46G。
 > Hunyuan3Dv2 (8193) 独占 GPU1，v3 3D 重建引擎。
@@ -419,7 +428,16 @@ python core/vidance.py ask "深海探险" --out input/concept.txt
 curl -X POST http://127.0.0.1:8894/api/dialog/start -H 'Content-Type: application/json' -d '{"concept":"深夜灯塔"}'
 curl -X POST http://127.0.0.1:8894/api/dialog/dlg_xxx/reply -H 'Content-Type: application/json' -d '{"text":"暴风雨夜，灯塔守护人独自值班"}'
 
+# v7 前端 agent WebUI（浏览器访问 http://127.0.0.1:8894/ui）
+# 左栏工具/任务边栏 + 顶部画布 + 右下发框；/ 弹命令补全
+# /fast 概念 -n 3 --effects auto   → 提交任务 → 画布轮询 → 成片 video 卡片
+# /hot /auto /ask /clip /scout /voices /video {id} /help 同理
+# 后端对应：
+curl http://127.0.0.1:8894/api/tools                     # 9 命令 + 参数 schema
+curl http://127.0.0.1:8894/api/options                   # 音色/LUT/BGM/特效枚举
+curl -X POST http://127.0.0.1:8894/api/tool/fast -H 'Content-Type: application/json' -d '{"args":"概念 -n 3 --effects auto"}'
+curl http://127.0.0.1:8894/api/video/{task_id} -o final.mp4   # 成片视频流
+
 # ── 已规划（🎯 待实现，见 docs/v7-design.md ~ v8-design.md）──
-# v7 前端 agent WebUI（仿豆包对话式，零 npm 自包含 HTML）
 # v8 一镜到底（链式 I2V 拼缝隐形，30s+）
 # python core/vidance.py auto "穿越隧道的光" --oneshot --duration 30

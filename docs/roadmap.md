@@ -326,14 +326,19 @@
 
 ---
 
-### v7 — 前端（🎯 待开发）
+### v7 — 前端（🚧 M1-M4 代码完成，端到端待 GPU）
 
 
 **目标**：仿豆包/智象未来的对话式 agent WebUI——左功能边栏 + 顶部大画布 + 右下发框；支持 `/` 斜杠命令调用既有 tool。
 
-**范围**：自包含 HTML+vanilla JS（FastAPI 静态服务，零 npm）。对话消息 + `/` 命令补全（读 /api/tools → `POST /api/tool/{name}` 统一分发 auto/fast/hot/ask/clip/scout/voices/video）+ 画布内进度轮询与成片 video 卡片 + 画廊/历史。新端点 `GET /api/video/{task_id}`、`GET /api/options`、`GET /api/tools`、`POST /api/tool/{name}`。复用 v6 dialog、v4 tasks/dashboard/scout/clone_voice/clip。
+**范围**：自包含 HTML+vanilla JS（FastAPI 静态服务，零 npm）。对话消息 + `/` 命令补全（读 /api/tools → `POST /api/tool/{name}` 统一分发 auto/fast/hot/ask/clip/scout/voices/video）+ 画布内进度轮询与成片 video 卡片 + 画廊/历史。复用 v6 dialog、v4 tasks/dashboard/scout/clone_voice/clip。
 
-**里程碑**：M1 骨架（静态+三栏+端点）→ M2 对话+/命令补全+/api/tool → M3 轮询+画布 video 卡片 → M4 接 /ask + scout
+**进度**：
+- **M1 后端端点** ✅：`GET /api/video/{task_id}`（视频流 FileResponse，curl 实测 1.7MB）+ `GET /api/options`（voices/luts/bgms/effects/motions 枚举）+ `GET /api/tools`（9 命令 + 参数 schema）+ `POST /api/tool/{name}`（统一分发）+ /ui StaticFiles；scheduler `_run_task` 加 mode 分发（auto/fast/hot 子命令映射）；TaskSubmit 加 mode/fast/hot 字段
+- **M2 对话+/命令** ✅：`ui/index.html` 三栏布局（左工具/任务边栏+顶部画布+右下发框）；`/` 补全弹层（读 /api/tools，↑↓/Tab/Enter 选择）；自然语言 → v6 dialog（新开/续聊，COMPLETE 后一键 /fast）
+- **M3 画布** ✅：任务卡片 2s 轮询 + 进度条 + video 卡片（completed 自动嵌 <video>）+ 左栏任务列表（点击回看）
+- **M4 ask+scout** ✅：/ask 返回问题 → 输入续聊 → 增强概念 chip 一键出片；scout 候选带分数展示；voices/clip/help 分发
+- 验证：后端全 curl 实测（tools/options/video/tool 9 命令分发）；JS node 语法校验通过；**浏览器渲染与成片端到端待 GPU 恢复后验证**
 
 **详细设计**：见 [v7-design.md](./v7-design.md)（含布局图与 slash 命令表）
 
@@ -459,7 +464,7 @@ vidance/
 │   ├── v4-design.md           # v4 营销号流水线设计（✅ M1-M6 完成）
 │   ├── v5-design.md           # v5 剪辑特效包（✅ M1-M4 完成）
 │   ├── v6-design.md           # v6 prompt 多轮核实（✅ M1-M4 完成）
-│   ├── v7-design.md           # v7 前端 agent WebUI（🎯 待开发）
+│   ├── v7-design.md           # v7 前端 agent WebUI（🚧 M1-M4 代码完成，端到端待 GPU）
 │   ├── v8-design.md           # v8 一镜到底（🎯 待开发）
 │   ├── v9-design.md           # v9 机器人网关（多 IM：企微/飞书/钉钉…，🎯 待开发）
 │   ├── hierachy.md

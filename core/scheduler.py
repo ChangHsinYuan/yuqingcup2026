@@ -260,33 +260,78 @@ class Scheduler:
         print(f'  [scheduler] started: {task["task_id"]} — {task["concept"][:40]}')
 
     def _run_task(self, task):
-        """执行单个任务（子进程调用 vidance.py auto）"""
+        """执行单个任务（子进程调用 vidance.py {auto|fast|hot}，v7 加 mode 分发）"""
         task_id = task['task_id']
         opts = task['options']
         concept = task['concept']
+        mode = opts.get('mode', 'auto')
+        if mode not in ('auto', 'fast', 'hot'):
+            mode = 'auto'
 
-        cmd = [sys.executable, '-u', os.path.join(os.path.dirname(__file__), 'vidance.py'), 'auto', concept]
+        cmd = [sys.executable, '-u', os.path.join(os.path.dirname(__file__), 'vidance.py'),
+               mode, concept]
 
-        if opts.get('character'):
-            cmd += ['--character', opts['character']]
-        if opts.get('character_mode'):
-            cmd += ['--character-mode', opts['character_mode']]
-        if opts.get('voice'):
-            cmd += ['--voice', opts['voice']]
-        if opts.get('duration'):
-            cmd += ['--duration', str(opts['duration'])]
-        if opts.get('slowmo'):
-            cmd += ['--slowmo', str(opts['slowmo'])]
-        if opts.get('lut'):
-            cmd += ['--lut', opts['lut']]
-        if opts.get('bgm'):
-            cmd += ['--bgm', opts['bgm']]
-        if opts.get('no_rife'):
-            cmd += ['--no-rife']
-        if opts.get('no_color'):
-            cmd += ['--no-color']
-        if opts.get('no_bgm'):
-            cmd += ['--no-bgm']
+        if mode == 'auto':
+            if opts.get('character'):
+                cmd += ['--character', opts['character']]
+            if opts.get('character_mode'):
+                cmd += ['--character-mode', opts['character_mode']]
+            if opts.get('voice'):
+                cmd += ['--voice', opts['voice']]
+            if opts.get('duration'):
+                cmd += ['--duration', str(opts['duration'])]
+            if opts.get('slowmo'):
+                cmd += ['--slowmo', str(opts['slowmo'])]
+            if opts.get('lut'):
+                cmd += ['--lut', opts['lut']]
+            if opts.get('bgm'):
+                cmd += ['--bgm', opts['bgm']]
+            if opts.get('no_rife'):
+                cmd += ['--no-rife']
+            if opts.get('no_color'):
+                cmd += ['--no-color']
+            if opts.get('no_bgm'):
+                cmd += ['--no-bgm']
+        elif mode == 'fast':
+            if opts.get('images_source'):
+                cmd += ['--images-source', opts['images_source']]
+            if opts.get('images_count'):
+                cmd += ['-n', str(opts['images_count'])]
+            if opts.get('effects'):
+                cmd += ['--effects', opts['effects']]
+            if opts.get('voice'):
+                cmd += ['--voice', opts['voice']]
+            if opts.get('motion'):
+                cmd += ['--motion', opts['motion']]
+            if opts.get('lut'):
+                cmd += ['--lut', opts['lut']]
+            if opts.get('bgm'):
+                cmd += ['--bgm', opts['bgm']]
+            if opts.get('slowmo'):
+                cmd += ['--slowmo', str(opts['slowmo'])]
+            if opts.get('stt'):
+                cmd += ['--stt']
+            if opts.get('no_bgm'):
+                cmd += ['--no-bgm']
+        else:  # hot
+            if opts.get('images_count'):
+                cmd += ['-n', str(opts['images_count'])]
+            if opts.get('top_each'):
+                cmd += ['--top-each', str(opts['top_each'])]
+            if opts.get('account'):
+                cmd += ['--account', opts['account']]
+            if opts.get('images_source'):
+                cmd += ['--images-source', opts['images_source']]
+            if opts.get('effects'):
+                cmd += ['--effects', opts['effects']]
+            if opts.get('voice'):
+                cmd += ['--voice', opts['voice']]
+            if opts.get('lut'):
+                cmd += ['--lut', opts['lut']]
+            if opts.get('bgm'):
+                cmd += ['--bgm', opts['bgm']]
+            if opts.get('stt'):
+                cmd += ['--stt']
 
         cmd += ['--task-id', task_id]
 
